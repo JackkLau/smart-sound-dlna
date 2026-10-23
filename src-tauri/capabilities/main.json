@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "仅本地音乐主窗口可使用已注册的播放命令。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

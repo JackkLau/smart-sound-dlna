@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.data/
+.DS_Store
+.venv/
+test-results/
+.tools/
+node_modules/
+src-tauri/target/
+src-tauri/gen/
+dist/

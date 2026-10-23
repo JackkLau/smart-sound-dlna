@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>小米音响 · 本地音乐</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13M9 9l12-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/><ellipse cx="18" cy="16" rx="3" ry="2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="i-previous" viewBox="0 0 24 24"><path d="M5 5v14m14-14-10 7 10 7Z"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M19 5v14M5 5l10 7-10 7Z"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5ZM15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="3"/><circle cx="12" cy="14" r="4"/><path d="M11 6h2"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l3 4h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></symbol>
+  </defs></svg>
+  <a class="skip-link" href="#library-title">跳到音乐库</a>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="小米音响本地音乐首页"><span class="brand-mark"><svg class="icon"><use href="#i-music"/></svg></span><span>小米音响<span class="brand-divider">/</span><span class="brand-sub">本地音乐</span></span></a>
+    <span class="connection" id="connection-status"><span class="status-dot"></span>正在连接</span>
+  </header>
+  <noscript><p class="notice">此工具需要 JavaScript 才能搜索音响和播放音乐，请在浏览器中启用 JavaScript。</p></noscript>
+  <main class="workspace">
+    <aside class="device-panel" aria-labelledby="device-title">
+      <div class="section-heading"><span class="eyebrow">播放设备</span><svg class="icon muted"><use href="#i-speaker"/></svg></div>
+      <div class="speaker-art" aria-hidden="true"><div class="speaker-top"><span></span><span></span><span></span></div><div class="speaker-body"><div class="speaker-light"></div><div class="speaker-grille"></div></div><div class="speaker-shadow"></div></div>
+      <div class="device-summary"><h1 id="device-title">连接你的音响</h1><p id="device-subtitle">让喜欢的音乐，回到房间里。</p></div>
+      <button disabled class="button primary discover-button" id="discover"><svg class="icon"><use href="#i-refresh"/></svg><span>搜索局域网音响</span></button>
+      <p class="device-hint" id="device-hint">音响需支持并开启 DLNA</p>
+      <div class="device-list" id="devices" aria-label="已发现的音响"></div>
+      <button disabled class="text-button manual-button" id="open-device">通过设备地址添加<svg class="icon small"><use href="#i-arrow"/></svg></button>
+      <div class="setup-note"><svg class="icon"><use href="#i-info"/></svg><div><strong>连接之前</strong><p>电脑和音响需要连接到同一局域网。若未找到设备，请检查音响的 DLNA 设置。</p></div></div>
+      <div class="connection-route"><span class="route-computer">本机音乐</span><span class="route-line"></span><span>无线音响</span></div>
+    </aside>
+    <section class="library-panel" aria-labelledby="library-title">
+      <div class="library-heading"><div><span class="eyebrow">你的私人曲库</span><h2 id="library-title" tabindex="-1">音乐库<span id="track-count" class="count">0</span></h2><p>收藏在电脑里的好声音，即选即播。</p></div><div class="import-actions"><button disabled class="button outline" id="open-folder"><svg class="icon"><use href="#i-folder"/></svg><span>导入文件夹</span></button><button disabled class="button dark" id="add-music"><svg class="icon"><use href="#i-plus"/></svg><span>添加音乐</span></button></div></div>
+      <input id="file-input" type="file" multiple hidden aria-label="选择本地音乐文件">
+      <div class="notice" id="connection-error" role="status" hidden><svg class="icon"><use href="#i-info"/></svg><p id="connection-error-text"></p><button disabled class="text-button" id="retry-connection">重新连接</button></div>
+      <div class="notice warning" id="playback-error" role="status" hidden><svg class="icon"><use href="#i-info"/></svg><p id="playback-error-text"></p></div>
+      <div class="library-toolbar"><div class="search-field"><svg class="icon"><use href="#i-search"/></svg><label class="sr-only" for="search">搜索音乐</label><input id="search" type="search" placeholder="搜索歌曲或文件名" autocomplete="off"><button disabled id="clear-search" class="icon-button" aria-label="清空搜索" title="清空搜索" hidden><svg class="icon small"><use href="#i-close"/></svg></button></div><span class="library-caption" id="library-caption">本地音乐 · 直接推流</span></div>
+      <section class="upload-panel" id="upload-panel" aria-labelledby="upload-heading" hidden><div class="upload-heading"><h3 id="upload-heading">添加音乐</h3><button disabled class="text-button" id="cancel-upload">取消剩余上传</button></div><ul id="upload-list" class="upload-list"></ul><p id="upload-summary" class="field-help" role="status"></p></section>
+      <div class="track-surface" id="drop-zone">
+        <div class="track-header" aria-hidden="true"><span>歌曲</span><span>格式</span><span>大小</span><span></span></div>
+        <ul class="track-list" id="tracks" aria-label="音乐列表"></ul>
+        <div class="empty-state" id="empty-state"><div class="empty-record" aria-hidden="true"><svg class="icon"><use href="#i-music"/></svg></div><h3 id="empty-title">这里，留给你的好音乐</h3><p id="empty-copy">添加本地音乐，或导入整个文件夹。<br>连接音响后，就能把音乐送到耳边。</p><button disabled class="button outline" id="empty-add"><svg class="icon"><use href="#i-plus"/></svg><span>添加第一首音乐</span></button><p class="format-hint" id="formats">正在读取支持的音乐格式…</p></div>
+        <div class="drop-overlay" aria-hidden="true"><svg class="icon"><use href="#i-upload"/></svg><span>松开鼠标，添加音乐</span></div>
+      </div>
+      <div class="library-footer"><span id="list-status" role="status">正在读取音乐库…</span><nav class="pagination" aria-label="音乐列表分页"><button class="icon-button" id="page-previous" aria-label="上一页" title="上一页" disabled><svg class="icon flip"><use href="#i-arrow"/></svg></button><span id="page-info">1 / 1</span><button class="icon-button" id="page-next" aria-label="下一页" title="下一页" disabled><svg class="icon"><use href="#i-arrow"/></svg></button></nav></div>
+      <p class="local-note"><span class="status-dot"></span>音乐直接从电脑传送。可关闭浏览器，播放时请保持后台程序运行。</p>
+    </section>
+  </main>
+  <footer class="player" aria-label="音乐播放控制">
+    <div class="now-playing"><div class="album-icon"><svg class="icon"><use href="#i-music"/></svg></div><div class="now-copy"><strong id="now-title">还没有播放音乐</strong><span id="now-subtitle">连接音响，选一首喜欢的歌</span></div></div>
+    <div class="transport"><div class="transport-buttons"><button class="icon-button" id="previous" aria-label="上一首" title="上一首" disabled><svg class="icon"><use href="#i-previous"/></svg></button><button class="play-button" id="play-pause" aria-label="播放" title="播放" disabled><svg class="icon"><use id="play-icon" href="#i-play"/></svg></button><button class="icon-button" id="next" aria-label="下一首" title="下一首" disabled><svg class="icon"><use href="#i-next"/></svg></button><button class="icon-button stop-button" id="stop" aria-label="停止" title="停止" disabled><svg class="icon small"><use href="#i-stop"/></svg></button></div><div class="timeline"><span id="elapsed">0:00</span><label class="sr-only" for="seek">播放进度</label><input id="seek" type="range" min="0" max="1" value="0" step="1" disabled><span id="duration">0:00</span></div></div>
+    <div class="player-settings"><label class="sr-only" for="mode">播放顺序</label><select id="mode" aria-label="播放顺序"><option value="sequential">顺序播放</option><option value="repeat-all">列表循环</option><option value="repeat-one">单曲循环</option></select><div class="volume-control"><svg class="icon"><use href="#i-volume"/></svg><label class="sr-only" for="volume">音量</label><input id="volume" type="range" min="0" max="100" value="30" step="1" disabled><output for="volume" id="volume-label">—</output></div></div>
+  </footer>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="folder-dialog" aria-labelledby="folder-title" aria-describedby="folder-description"><form id="folder-form" novalidate><div class="dialog-heading"><div><span class="eyebrow">从电脑导入</span><h2 id="folder-title">导入音乐文件夹</h2></div><button disabled type="button" class="icon-button dialog-close" aria-label="关闭导入文件夹" title="关闭"><svg class="icon"><use href="#i-close"/></svg></button></div><p id="folder-description" class="dialog-description">填写运行后台程序这台电脑上的文件夹路径。子文件夹中的音乐也会一并加入，不会复制原文件。</p><label class="field-label" for="folder-path">文件夹完整路径</label><input class="text-input" id="folder-path" name="path" type="text" placeholder="例如 /Users/你的名字/Music" autocomplete="off" required aria-describedby="folder-help folder-error"><p class="field-help" id="folder-help">填写文件夹的绝对路径；也支持以 ~ 表示个人目录。无需添加引号。</p><p class="field-error" id="folder-error" role="alert"></p><div class="dialog-actions"><button disabled type="button" class="button outline dialog-close">取消</button><button disabled type="submit" class="button primary" id="folder-submit">导入文件夹</button></div></form></dialog>
+  <dialog id="device-dialog" aria-labelledby="manual-title" aria-describedby="manual-description"><form id="device-form" novalidate><div class="dialog-heading"><div><span class="eyebrow">手动连接</span><h2 id="manual-title">添加音响地址</h2></div><button disabled type="button" class="icon-button dialog-close" aria-label="关闭添加音响" title="关闭"><svg class="icon"><use href="#i-close"/></svg></button></div><p id="manual-description" class="dialog-description">自动搜索未发现音响时，可填写它的 DLNA 设备描述地址。</p><label class="field-label" for="device-url">设备描述地址</label><input class="text-input" id="device-url" name="url" type="url" placeholder="http://192.168.1.100:端口/description.xml" autocomplete="off" required aria-describedby="device-url-help device-error"><p class="field-help" id="device-url-help">需要完整的 http 或 https 地址，通常以 .xml 结尾。</p><p class="field-error" id="device-error" role="alert"></p><div class="dialog-actions"><button disabled type="button" class="button outline dialog-close">取消</button><button disabled type="submit" class="button primary" id="device-submit">添加音响</button></div></form></dialog>
+</body>
+</html>

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>小米音响 · 本地音乐</title>
+  <link rel="stylesheet" href="./style.css">
+  <script src="./app.js" defer></script>
+  <script src="./features.js" defer></script>
+</head>
+<body>
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-music" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13M9 9l12-2"/><ellipse cx="6" cy="18" rx="3" ry="2"/><ellipse cx="18" cy="16" rx="3" ry="2"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1"/></symbol>
+    <symbol id="i-previous" viewBox="0 0 24 24"><path d="M5 5v14m14-14-10 7 10 7Z"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M19 5v14M5 5l10 7-10 7Z"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="m11 4-6 5H2v6h3l6 5ZM15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="3"/><circle cx="12" cy="14" r="4"/><path d="M11 6h2"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l3 4h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></symbol>
+  </defs></svg>
+  <a class="skip-link" href="#library-title">跳到音乐库</a>
+  <header class="topbar">
+    <div class="brand" aria-label="小米音响本地音乐桌面客户端"><span class="brand-mark"><svg class="icon"><use href="#i-music"/></svg></span><span>小米音响<span class="brand-divider">/</span><span class="brand-sub">本地音乐</span></span></div>
+    <span class="connection" id="connection-status"><span class="status-dot"></span>正在启动</span>
+  </header>
+  <noscript><p class="notice">客户端界面未能启动，请重新启动应用。</p></noscript>
+  <main class="workspace">
+    <aside class="device-panel" aria-labelledby="device-title">
+      <div class="section-heading"><span class="eyebrow">播放设备</span><svg class="icon muted"><use href="#i-speaker"/></svg></div>
+      <div class="speaker-art" aria-hidden="true"><div class="speaker-top"><span></span><span></span><span></span></div><div class="speaker-body"><div class="speaker-light"></div><div class="speaker-grille"></div></div><div class="speaker-shadow"></div></div>
+      <div class="device-summary"><h1 id="device-title">连接你的音响</h1><p id="device-subtitle">让喜欢的音乐，回到房间里。</p></div>
+      <button disabled class="button primary discover-button" id="discover"><svg class="icon"><use href="#i-refresh"/></svg><span>重新搜索音响</span></button>
+      <p class="device-hint" id="device-hint" role="status">启动后自动发现局域网音响</p>
+      <p class="discovery-error" id="discovery-error" role="status" hidden></p>
+      <div class="device-list" id="devices" aria-label="已发现的音响"></div>
+      <button disabled class="text-button manual-button" id="open-device">通过设备地址添加<svg class="icon small"><use href="#i-arrow"/></svg></button>
+      <div class="setup-note"><svg class="icon"><use href="#i-info"/></svg><div><strong>连接之前</strong><p>自动搜索小米 / 小爱音箱 Pro。电脑与音响需在同一局域网，音响需支持并开启 DLNA。</p></div></div>
+      <button disabled class="button outline voice-open" id="open-voice">小爱语音<span id="voice-badge">未连接</span></button>
+      <div class="connection-route"><span class="route-computer">本机音乐</span><span class="route-line"></span><span>无线音响</span></div>
+    </aside>
+    <section class="library-panel" aria-labelledby="library-title">
+      <div class="library-heading"><div><span class="eyebrow">你的私人曲库</span><h2 id="library-title" tabindex="-1">音乐库<span id="track-count" class="count">0</span></h2><p>收藏在电脑里的好声音，即选即播。</p></div><div class="import-actions"><button disabled class="button outline" id="open-folder"><svg class="icon"><use href="#i-folder"/></svg><span>导入文件夹</span></button><button disabled class="button dark" id="add-music"><svg class="icon"><use href="#i-plus"/></svg><span>添加音乐</span></button></div></div>
+      <div class="notice" id="connection-error" role="status" hidden><svg class="icon"><use href="#i-info"/></svg><p id="connection-error-text"></p><button disabled class="text-button" id="retry-connection">重新检查</button></div>
+      <div class="notice warning" id="playback-error" role="status" hidden><svg class="icon"><use href="#i-info"/></svg><p id="playback-error-text"></p></div>
+      <div class="source-toolbar"><div><strong>把喜欢的声音，留在曲库</strong><span>导入视频音轨后，也能语音点播</span></div><button disabled class="button outline" id="open-bilibili">从 Bilibili 导入</button></div>
+      <section class="download-panel" id="download-panel" aria-labelledby="download-title" hidden><div class="section-heading"><h3 id="download-title">音频下载</h3><span class="field-help">完成后自动加入曲库</span></div><p id="download-error" class="field-error" role="alert"></p><ul id="download-jobs" class="download-jobs"></ul></section>
+      <div class="library-toolbar"><div class="search-field"><svg class="icon"><use href="#i-search"/></svg><label class="sr-only" for="search">搜索音乐</label><input id="search" type="search" placeholder="搜索歌曲或文件名" autocomplete="off"><button disabled id="clear-search" class="icon-button" aria-label="清空搜索" title="清空搜索" hidden><svg class="icon small"><use href="#i-close"/></svg></button></div><span class="library-caption" id="library-caption">本地音乐 · 直接推流</span></div>
+      <div class="import-status" id="import-status" role="status" hidden><svg class="icon"><use href="#i-folder"/></svg><div><strong id="import-status-title"></strong><p id="import-status-copy"></p></div></div>
+      <div class="track-surface">
+        <div class="track-header" aria-hidden="true"><span>歌曲</span><span>格式</span><span>大小</span><span></span></div>
+        <ul class="track-list" id="tracks" aria-label="音乐列表"></ul>
+        <div class="empty-state" id="empty-state"><div class="empty-record" aria-hidden="true"><svg class="icon"><use href="#i-music"/></svg></div><h3 id="empty-title">这里，留给你的好音乐</h3><p id="empty-copy">添加本地音乐，或导入整个文件夹。<br>连接音响后，就能把音乐送到耳边。</p><button disabled class="button outline" id="empty-add"><svg class="icon"><use href="#i-plus"/></svg><span>添加第一首音乐</span></button><p class="format-hint" id="formats">正在读取支持的音乐格式…</p></div>
+      </div>
+      <div class="library-footer"><span id="list-status" role="status">正在读取音乐库…</span><nav class="pagination" aria-label="音乐列表分页"><button class="icon-button" id="page-previous" aria-label="上一页" title="上一页" disabled><svg class="icon flip"><use href="#i-arrow"/></svg></button><span id="page-info">1 / 1</span><button class="icon-button" id="page-next" aria-label="下一页" title="下一页" disabled><svg class="icon"><use href="#i-arrow"/></svg></button></nav></div>
+      <p class="local-note"><span class="status-dot"></span>音乐直接从电脑传送，不上传云端。播放时请保持客户端运行。</p>
+    </section>
+  </main>
+  <footer class="player" aria-label="音乐播放控制">
+    <div class="now-playing"><div class="album-icon"><svg class="icon"><use href="#i-music"/></svg></div><div class="now-copy"><strong id="now-title">还没有播放音乐</strong><span id="now-subtitle">连接音响，选一首喜欢的歌</span></div></div>
+    <div class="transport"><div class="transport-buttons"><button class="icon-button" id="previous" aria-label="上一首" title="上一首" disabled><svg class="icon"><use href="#i-previous"/></svg></button><button class="play-button" id="play-pause" aria-label="播放" title="播放" disabled><svg class="icon"><use id="play-icon" href="#i-play"/></svg></button><button class="icon-button" id="next" aria-label="下一首" title="下一首" disabled><svg class="icon"><use href="#i-next"/></svg></button><button class="icon-button stop-button" id="stop" aria-label="停止" title="停止" disabled><svg class="icon small"><use href="#i-stop"/></svg></button></div><div class="timeline"><span id="elapsed">0:00</span><label class="sr-only" for="seek">播放进度</label><input id="seek" type="range" min="0" max="1" value="0" step="1" disabled><span id="duration">0:00</span></div></div>
+    <div class="player-settings"><label class="sr-only" for="mode">播放顺序</label><select disabled id="mode" aria-label="播放顺序"><option value="sequential">顺序播放</option><option value="repeat-all">列表循环</option><option value="repeat-one">单曲循环</option></select><div class="volume-control"><svg class="icon"><use href="#i-volume"/></svg><label class="sr-only" for="volume">音量</label><input id="volume" type="range" min="0" max="100" value="30" step="1" disabled><output for="volume" id="volume-label">—</output></div></div>
+  </footer>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="device-dialog" aria-labelledby="manual-title" aria-describedby="manual-description"><form id="device-form" novalidate><div class="dialog-heading"><div><span class="eyebrow">手动连接</span><h2 id="manual-title">添加音响地址</h2></div><button disabled type="button" class="icon-button dialog-close" aria-label="关闭添加音响" title="关闭"><svg class="icon"><use href="#i-close"/></svg></button></div><p id="manual-description" class="dialog-description">自动搜索未发现音响时，可填写它的 DLNA 设备描述地址。通常不需要手动设置。</p><label class="field-label" for="device-url">设备描述地址</label><input class="text-input" id="device-url" name="url" type="url" placeholder="http://192.168.1.100:端口/description.xml" autocomplete="off" required aria-describedby="device-url-help device-error"><p class="field-help" id="device-url-help">需要完整的 http 或 https 地址，通常以 .xml 结尾。</p><p class="field-error" id="device-error" role="alert"></p><div class="dialog-actions"><button disabled type="button" class="button outline dialog-close">取消</button><button disabled type="submit" class="button primary" id="device-submit">添加音响</button></div></form></dialog>
+  <dialog id="bilibili-dialog" class="feature-dialog" aria-labelledby="bilibili-title" aria-describedby="bilibili-description">
+    <div class="dialog-heading"><div><span class="eyebrow">扩充你的曲库</span><h2 id="bilibili-title">从 Bilibili 导入音频</h2></div><button disabled type="button" class="icon-button" data-feature-close aria-label="关闭 Bilibili 导入"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <p class="dialog-description" id="bilibili-description">粘贴视频链接，选择一个分 P，音轨会下载为 M4A 并加入本地曲库。请仅下载你有权保存的内容。</p>
+    <form id="bilibili-form" novalidate>
+      <label class="field-label" for="bilibili-url">视频链接或 BV 号</label>
+      <div class="inline-field"><input class="text-input" id="bilibili-url" autocomplete="off" spellcheck="false" placeholder="https://www.bilibili.com/video/BV…" aria-describedby="bilibili-help bilibili-form-error" maxlength="2048"><button disabled class="button primary" type="submit">解析视频</button></div>
+      <p class="field-help" id="bilibili-help">支持普通视频、分 P 链接和 b23.tv 短链接。</p><p class="field-error" id="bilibili-form-error" role="alert"></p>
+    </form>
+    <form id="download-form" class="preview-panel" novalidate hidden>
+      <span class="eyebrow">视频预览</span><h3 id="preview-title"></h3><p id="preview-author" class="field-help"></p>
+      <label class="field-label" for="bilibili-part">选择要收藏的音轨</label><select id="bilibili-part" class="text-input" aria-describedby="download-form-error"></select>
+      <p class="field-help">保留原始 AAC 音轨，不下载画面。一次选择一首，可继续添加到队列。</p><p class="field-error" id="download-form-error" role="alert"></p>
+      <div class="dialog-actions"><button disabled class="button primary" type="submit">下载并加入曲库</button></div>
+    </form>
+    <details class="feature-details"><summary>账号与保存位置</summary><p class="field-help">公开视频可直接解析。需要登录的视频可在官方页面登录；会话只用于本次运行。</p><div class="login-actions" data-provider="bilibili"><button disabled type="button" class="button outline" data-login="bilibili">登录 Bilibili</button><button disabled type="button" class="button outline" data-finish-login="bilibili" hidden>完成登录</button><button disabled type="button" class="text-button" data-disconnect="bilibili" hidden>退出登录</button></div><p id="bilibili-account-status" class="field-help" role="status">未登录</p><p id="bilibili-login-error" class="field-error" role="alert"></p><p class="field-label">保存位置</p><p id="download-directory" class="field-help path-copy"></p></details>
+    <p class="field-help dialog-footnote">可以关闭此窗口继续听歌。下载进度显示在音乐库上方；退出客户端会中断未完成的任务。</p>
+  </dialog>
+  <dialog id="voice-dialog" class="feature-dialog" aria-labelledby="voice-title" aria-describedby="voice-description">
+    <div class="dialog-heading"><div><span class="eyebrow">开口，播放你的收藏</span><h2 id="voice-title">小爱语音点播</h2></div><button disabled type="button" class="icon-button" data-feature-close aria-label="关闭小爱语音设置"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <p class="dialog-description" id="voice-description">连接绑定音响的小米账号，读取新出现的本地点播指令。电脑和音响保持联网，客户端保持运行。</p>
+    <div class="login-actions" data-provider="xiaomi"><button disabled type="button" class="button outline" data-login="xiaomi">登录小米账号</button><button disabled type="button" class="button outline" data-finish-login="xiaomi" hidden>完成登录</button><button disabled type="button" class="text-button" data-disconnect="xiaomi" hidden>断开账号</button></div>
+    <p id="xiaomi-account-status" class="field-help" role="status">登录在小米官方页面完成，无需在此输入密码。</p><p id="xiaomi-login-error" class="field-error" role="alert"></p>
+    <form id="voice-bind-form" novalidate>
+      <label class="field-label" for="voice-source">听取哪台小爱的指令</label><select id="voice-source" class="text-input" disabled aria-describedby="voice-target voice-bind-form-error"><option value="">登录后选择音响</option></select>
+      <p id="voice-target" class="field-help">播放到：请先在主界面连接音响</p><p class="field-error" id="voice-bind-form-error" role="alert"></p>
+      <div class="dialog-actions"><button disabled type="button" class="button outline" id="voice-stop" disabled>停止接收</button><button disabled class="button primary" type="submit" id="voice-start" disabled>开始接收指令</button></div>
+    </form>
+    <div class="voice-status"><strong id="voice-status-title">尚未开始接收</strong><p id="voice-status-copy" class="field-help" role="status">使用下方测试入口，可先检查点歌指令。</p><p id="voice-runtime-error" class="field-error" role="status"></p></div>
+    <div class="command-guide"><strong>先说“小爱同学”，再说：</strong><p>播放本地 + 歌名 · 本地下一首 · 本地上一首<br>本地暂停 · 本地继续 · 本地停止 · 本地音量三十</p><p class="field-help">还支持：本地单曲循环 / 列表循环 / 顺序播放。歌名有多个匹配时会提示说得更完整。</p></div>
+    <form id="voice-test-form" novalidate><label class="field-label" for="voice-text">测试指令</label><div class="inline-field"><input class="text-input" id="voice-text" placeholder="播放本地 晴天" maxlength="300" aria-describedby="voice-test-help voice-test-form-error"><button disabled class="button outline" type="submit">执行指令</button></div><p class="field-help" id="voice-test-help">使用与小爱语音相同的指令处理，会实际控制当前音响。</p><p id="voice-test-result" class="field-help" role="status"></p><p class="field-error" id="voice-test-form-error" role="alert"></p></form>
+    <details class="feature-details"><summary>登录遇到问题？使用已有会话</summary><p class="field-help">高级接入：可粘贴自己小爱服务会话中的 userId 和 serviceToken（micoapi）。仅在内存使用，不写入磁盘或日志。</p><form id="voice-session-form" novalidate><label class="field-label" for="voice-cookie">小爱服务 Cookie</label><input class="text-input" type="password" id="voice-cookie" autocomplete="off" maxlength="16384" placeholder="userId=…; serviceToken=…" aria-describedby="voice-session-form-error"><p class="field-error" id="voice-session-form-error" role="alert"></p><div class="dialog-actions"><button disabled class="button outline" type="submit">连接会话</button></div></form></details>
+    <p class="field-help dialog-footnote">此功能依赖小米云端对话记录，可能有数秒延迟。账号、固件或接口变化可能影响接入；未读取到记录时会明确提示。重启客户端后需重新连接。</p>
+  </dialog>
+</body>
+</html>
