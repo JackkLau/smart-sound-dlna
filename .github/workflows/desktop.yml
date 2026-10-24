@@ -35,6 +35,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: rustfmt,clippy
+      - uses: actions/cache/restore@v4
+        id: rust-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock') }}-
       - run: npm ci
       - run: npm run check:ui
       - run: npm run test:ui
@@ -49,7 +58,8 @@ jobs:
           result=${PIPESTATUS[0]}
           set -e
           if [ "$result" -ne 0 ]; then
-            details="$(tail -n 90 "$RUNNER_TEMP/cargo-test.log")"
+            details="$(tail -n 35 "$RUNNER_TEMP/cargo-test.log")"
+            details="${details: -3000}"
             details="${details//'%'/'%25'}"
             details="${details//$'\r'/'%0D'}"
             details="${details//$'\n'/'%0A'}"
@@ -58,6 +68,14 @@ jobs:
           exit "$result"
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
       - run: npm run build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+      - uses: actions/cache/save@v4
+        if: always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ steps.rust-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
           name: xiaomi-music-${{ matrix.target }}
