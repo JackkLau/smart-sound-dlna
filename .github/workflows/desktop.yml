@@ -59,7 +59,7 @@ jobs:
           set -e
           if [ "$result" -ne 0 ]; then
             details="$(tail -n 35 "$RUNNER_TEMP/cargo-test.log")"
-            details="${details: -3000}"
+            if [ "${#details}" -gt 3000 ]; then details="${details: -3000}"; fi
             details="${details//'%'/'%25'}"
             details="${details//$'\r'/'%0D'}"
             details="${details//$'\n'/'%0A'}"
