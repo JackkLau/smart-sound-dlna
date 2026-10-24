@@ -22,7 +22,11 @@ pub fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-pub async fn json(mut response: Response) -> Result<Value, String> {
+pub async fn json(response: Response) -> Result<Value, String> {
+    json_with_prefix(response, b"").await
+}
+
+pub async fn json_with_prefix(mut response: Response, prefix: &[u8]) -> Result<Value, String> {
     if !response.status().is_success() {
         return Err(match response.status().as_u16() {
             401 | 403 => "访问被拒绝，请重新登录或确认该内容的访问权限。".into(),
@@ -41,7 +45,7 @@ pub async fn json(mut response: Response) -> Result<Value, String> {
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes)
+    serde_json::from_slice(bytes.strip_prefix(prefix).unwrap_or(&bytes))
         .map_err(|_| "服务返回了无法识别的数据，请稍后重试或重新登录。".into())
 }
 

@@ -1,4 +1,4 @@
-//! Shared application state. All speaker commands are serialized, including polling.
+//! Shared state. User commands preempt read-only polling; mutations stay serialized.
 use crate::{
     bilibili::Downloader,
     dlna::{self, Controller, Device},
@@ -15,14 +15,19 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{watch, Mutex as AsyncMutex, MutexGuard, Notify};
 use tokio_util::sync::CancellationToken;
+
+#[cfg(test)]
+#[path = "engine_connection_tests.rs"]
+mod connection_tests;
 
 #[derive(Serialize)]
 pub struct Snapshot {
     pub tracks: Vec<Track>,
     pub devices: Vec<Device>,
     pub selected_device_id: Option<String>,
+    pub device_connection: ConnectionState,
     pub current_track_id: Option<String>,
     pub transport_state: String,
     pub position: u64,
@@ -37,9 +42,70 @@ pub struct Snapshot {
     pub media_port: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionState {
+    Unselected,
+    Checking,
+    Connected,
+    Disconnected,
+}
+
+struct Connection {
+    state: ConnectionState,
+    failures: u32,
+    next_probe: Option<Instant>,
+    last_scan: Option<Instant>,
+}
+
+impl Default for Connection {
+    fn default() -> Self {
+        Self {
+            state: ConnectionState::Unselected,
+            failures: 0,
+            next_probe: None,
+            last_scan: None,
+        }
+    }
+}
+
+impl Connection {
+    fn retry_now(&mut self) {
+        self.state = ConnectionState::Checking;
+        self.next_probe = None;
+    }
+
+    fn connected(&mut self) {
+        self.state = ConnectionState::Connected;
+        self.failures = 0;
+        self.next_probe = None;
+        self.last_scan = None;
+    }
+
+    fn failed(&mut self, now: Instant) {
+        self.state = ConnectionState::Disconnected;
+        self.failures = self.failures.saturating_add(1);
+        let delay = (2u64 << (self.failures - 1).min(4)).min(30);
+        self.next_probe = Some(now + Duration::from_secs(delay));
+    }
+
+    fn scan_due(&mut self, now: Instant) -> bool {
+        if self.state != ConnectionState::Disconnected
+            || self
+                .last_scan
+                .is_some_and(|last| now.duration_since(last) < Duration::from_secs(30))
+        {
+            return false;
+        }
+        self.last_scan = Some(now);
+        true
+    }
+}
+
 struct Player {
     devices: HashMap<String, (Device, Instant)>,
     selected: Option<String>,
+    connection: Connection,
     current: Option<String>,
     uri: Option<String>,
     transport: String,
@@ -60,6 +126,7 @@ impl Default for Player {
         Self {
             devices: HashMap::new(),
             selected: None,
+            connection: Connection::default(),
             current: None,
             uri: None,
             transport: "STOPPED".into(),
@@ -123,6 +190,8 @@ pub struct Engine {
     player: AsyncMutex<Player>,
     actions: AsyncMutex<()>,
     discovery: AsyncMutex<()>,
+    activity: watch::Sender<u64>,
+    poll_wake: Notify,
     shutdown: CancellationToken,
 }
 
@@ -144,6 +213,8 @@ impl Engine {
             player: AsyncMutex::new(Player::default()),
             actions: AsyncMutex::new(()),
             discovery: AsyncMutex::new(()),
+            activity: watch::channel(0).0,
+            poll_wake: Notify::new(),
             shutdown,
         }))
     }
@@ -151,14 +222,29 @@ impl Engine {
     pub fn start(self: &Arc<Self>) {
         let engine = self.clone();
         tokio::spawn(async move {
+            // One startup scan; thereafter discovery is manual while healthy.
+            tokio::select! {
+                _ = engine.shutdown.cancelled() => return,
+                _ = engine.discover() => {}
+            }
             loop {
                 tokio::select! {
                     _ = engine.shutdown.cancelled() => break,
-                    _ = engine.discover() => {}
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
                 }
-                tokio::select! {
-                    _ = engine.shutdown.cancelled() => break,
-                    _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+                // A selected offline renderer may have changed its IP. Refresh
+                // descriptions without changing the user's selected device ID.
+                let recover = engine
+                    .player
+                    .lock()
+                    .await
+                    .connection
+                    .scan_due(Instant::now());
+                if recover {
+                    tokio::select! {
+                        _ = engine.shutdown.cancelled() => break,
+                        _ = engine.discover() => {}
+                    }
                 }
             }
         });
@@ -168,6 +254,7 @@ impl Engine {
                 tokio::select! {
                     _ = engine.shutdown.cancelled() => break,
                     _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+                    _ = engine.poll_wake.notified() => {}
                 }
                 tokio::select! {
                     _ = engine.shutdown.cancelled() => break,
@@ -183,6 +270,14 @@ impl Engine {
 
     pub fn shutdown(&self) {
         self.shutdown.cancel();
+    }
+
+    async fn begin_action(&self) -> MutexGuard<'_, ()> {
+        // Cancel only read-only background requests. Foreground SOAP mutations
+        // stay serialized and are never cancelled halfway through a URI change.
+        self.activity
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
+        self.actions.lock().await
     }
 
     async fn tracks(&self) -> Result<Vec<Track>, String> {
@@ -211,6 +306,7 @@ impl Engine {
             tracks,
             devices,
             selected_device_id: p.selected.clone(),
+            device_connection: p.connection.state,
             current_track_id: p.current.clone(),
             transport_state: p.transport.clone(),
             position: p.position,
@@ -252,6 +348,11 @@ impl Engine {
                         || now.duration_since(*at) < Duration::from_secs(120)
                 });
                 for device in report.devices {
+                    if p.selected.as_ref() == Some(&device.id)
+                        && p.connection.state == ConnectionState::Disconnected
+                    {
+                        p.connection.next_probe = None;
+                    }
                     p.devices.insert(device.id.clone(), (device, now));
                 }
                 p.warnings = report.warnings;
@@ -262,6 +363,7 @@ impl Engine {
             }
         }
         drop(p);
+        self.poll_wake.notify_one();
         self.snapshot().await
     }
 
@@ -276,7 +378,7 @@ impl Engine {
     }
 
     pub async fn select(&self, id: &str) -> Result<Snapshot, String> {
-        let _guard = self.actions.lock().await;
+        let _guard = self.begin_action().await;
         let previous = {
             let p = self.player.lock().await;
             if !p.devices.contains_key(id) {
@@ -309,13 +411,17 @@ impl Engine {
             p.duration = 0;
             p.volume = None;
             p.error = None;
+            p.connection = Connection::default();
             if let Some(error) = stop_error {
                 p.warnings.push(format!(
                     "已切换设备，但原音箱未确认停止，请检查原音箱：{error}"
                 ));
             }
         }
+        p.connection.retry_now();
         drop(p);
+        drop(_guard);
+        self.poll_wake.notify_one();
         self.snapshot().await
     }
 
@@ -348,18 +454,92 @@ impl Engine {
         .map_err(|e| e.to_string())?
     }
 
+    pub async fn rename_track(
+        &self,
+        id: String,
+        title: String,
+        expected_title: String,
+    ) -> Result<Snapshot, String> {
+        let library = self.library.clone();
+        tokio::task::spawn_blocking(move || {
+            library
+                .lock()
+                .map_err(|_| "音乐库暂时不可用".to_owned())?
+                .rename(&id, &title, &expected_title)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        // Metadata-only: keep the active URI, queue, playback and voice binding.
+        self.snapshot().await
+    }
+
+    pub async fn remove_track(&self, id: String) -> Result<Snapshot, String> {
+        let _guard = self.begin_action().await;
+        let library = self.library.clone();
+        let check_id = id.clone();
+        tokio::task::spawn_blocking(move || {
+            library
+                .lock()
+                .map_err(|_| "音乐库暂时不可用".to_owned())?
+                .get(&check_id)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        let current = self.player.lock().await.current.as_deref() == Some(&id);
+        if current {
+            self.control_locked("stop", Value::Null)
+                .await
+                .map_err(|e| format!("音响未能停止，尚未移除这首音乐。请确认连接后重试：{e}"))?;
+        }
+        let library = self.library.clone();
+        tokio::task::spawn_blocking(move || {
+            library
+                .lock()
+                .map_err(|_| "音乐库暂时不可用".to_owned())?
+                .remove(&id)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        if current {
+            let mut p = self.player.lock().await;
+            p.current = None;
+            p.uri = None;
+            p.transport = "STOPPED".into();
+            p.position = 0;
+            p.duration = 0;
+            p.completion = Completion::default();
+        }
+        drop(_guard);
+        self.snapshot().await
+    }
+
+    pub async fn recognize_track_name(
+        &self,
+        id: String,
+    ) -> Result<crate::track_names::Suggestion, String> {
+        let library = self.library.clone();
+        tokio::task::spawn_blocking(move || {
+            library
+                .lock()
+                .map_err(|_| "音乐库暂时不可用".to_owned())?
+                .recognize_name(&id)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
     pub async fn voice_command(
         &self,
         text: &str,
         expected_device: Option<&str>,
     ) -> Result<String, String> {
         let command = voice::parse(text)?;
-        let _guard = self.actions.lock().await;
+        let _guard = self.begin_action().await;
         let selected = self.selected().await?;
         if expected_device.is_some_and(|id| id != selected.id) {
             return Err("播放音响已切换，请在语音设置里重新绑定后再点播。".into());
         }
-        match command {
+        let result = match command {
             voice::Command::Play(query) => {
                 let tracks = self.tracks().await?;
                 let track = voice::match_track(&query, &tracks)?;
@@ -390,7 +570,10 @@ impl Engine {
                 self.control_locked("mode", Value::from(mode)).await?;
                 Ok("已更新本地播放顺序。".into())
             }
-        }
+        };
+        drop(_guard);
+        self.poll_wake.notify_one();
+        result
     }
 
     async fn selected(&self) -> Result<Device, String> {
@@ -403,8 +586,11 @@ impl Engine {
     }
 
     pub async fn play(&self, id: &str) -> Result<Snapshot, String> {
-        let _guard = self.actions.lock().await;
-        self.play_locked(id).await?;
+        let _guard = self.begin_action().await;
+        let result = self.play_locked(id).await;
+        drop(_guard);
+        self.poll_wake.notify_one();
+        result?;
         self.snapshot().await
     }
 
@@ -431,9 +617,11 @@ impl Engine {
             .await;
         let mut p = self.player.lock().await;
         if let Err(error) = result {
+            p.connection.next_probe = None;
             p.error = Some(error.clone());
             return Err(error);
         }
+        p.connection.connected();
         p.current = Some(id.to_string());
         p.uri = Some(uri);
         p.transport = "TRANSITIONING".into();
@@ -448,8 +636,11 @@ impl Engine {
     }
 
     pub async fn control(&self, action: &str, value: Value) -> Result<Snapshot, String> {
-        let _guard = self.actions.lock().await;
-        self.control_locked(action, value).await
+        let _guard = self.begin_action().await;
+        let result = self.control_locked(action, value).await;
+        drop(_guard);
+        self.poll_wake.notify_one();
+        result
     }
 
     async fn control_locked(&self, action: &str, value: Value) -> Result<Snapshot, String> {
@@ -497,9 +688,11 @@ impl Engine {
         };
         let mut p = self.player.lock().await;
         if let Err(error) = result {
+            p.connection.next_probe = None;
             p.error = Some(error.clone());
             return Err(error);
         }
+        p.connection.connected();
         p.error = None;
         match action {
             "pause" => {
@@ -540,16 +733,40 @@ impl Engine {
     }
 
     async fn poll(&self) {
+        let mut activity = self.activity.subscribe();
         let Ok(_guard) = self.actions.try_lock() else {
             return;
         };
+        if self
+            .player
+            .lock()
+            .await
+            .connection
+            .next_probe
+            .is_some_and(|at| Instant::now() < at)
+        {
+            return;
+        }
         let Ok(device) = self.selected().await else {
             return;
         };
-        let status = Controller::new(device).get_status().await;
+        let controller = Controller::new(device);
+        let status = tokio::select! {
+            biased;
+            _ = activity.changed() => return,
+            _ = self.shutdown.cancelled() => return,
+            status = controller.get_status() => status,
+        };
+        if activity.has_changed().unwrap_or(true) {
+            return;
+        }
         let mut p = self.player.lock().await;
+        if activity.has_changed().unwrap_or(true) {
+            return;
+        }
         let advance = match status {
             Ok(status) => {
+                p.connection.connected();
                 p.error = if status.warnings.is_empty() {
                     None
                 } else {
@@ -582,13 +799,18 @@ impl Engine {
                 }
             }
             Err(error) => {
+                p.connection.failed(Instant::now());
                 p.error = Some(error);
+                p.transport = "UNAVAILABLE".into();
+                p.volume = None;
+                // Discard stale near-end evidence, but allow a fresh PLAYING
+                // observation to preserve queue playback after a brief outage.
                 p.completion.playing = None;
                 false
             }
         };
         drop(p);
-        if advance {
+        if advance && !activity.has_changed().unwrap_or(true) {
             if let Err(error) = self.advance_locked(1, true).await {
                 self.player.lock().await.error = Some(error);
             }

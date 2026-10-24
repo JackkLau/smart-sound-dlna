@@ -314,6 +314,121 @@ async fn import_cast_and_control_use_real_soap_and_fetchable_music() {
 }
 
 #[tokio::test]
+async fn rename_is_immediate_for_voice_and_does_not_interrupt_current_playback() {
+    let fixture = Fixture::new().await;
+    let id = fixture.import("视频原标题.mp3", b"original music").await;
+    fixture.connect().await;
+    let playing = fixture.engine.play(&id).await.unwrap();
+    let before = fixture.uri();
+    let actions_before = fixture.renderer.lock().unwrap().actions.len();
+    let snapshot = fixture
+        .engine
+        .rename_track(id.clone(), "螺旋 现场版".into(), "视频原标题".into())
+        .await
+        .unwrap();
+    assert_eq!(snapshot.current_track_id.as_deref(), Some(id.as_str()));
+    assert_eq!(snapshot.transport_state, playing.transport_state);
+    assert_eq!(snapshot.tracks[0].title, "螺旋 现场版");
+    assert_eq!(fixture.uri(), before);
+    assert_eq!(fixture.renderer.lock().unwrap().transport, "PLAYING");
+    assert_eq!(
+        fixture.renderer.lock().unwrap().actions.len(),
+        actions_before
+    );
+
+    let result = fixture
+        .engine
+        .voice_command("小爱同学，播放本地螺旋现场版", None)
+        .await
+        .unwrap();
+    assert!(result.contains("螺旋 现场版"));
+    assert_eq!(
+        fixture
+            .engine
+            .snapshot()
+            .await
+            .unwrap()
+            .current_track_id
+            .as_deref(),
+        Some(id.as_str())
+    );
+    {
+        let renderer = fixture.renderer.lock().unwrap();
+        let metadata = &renderer
+            .actions
+            .iter()
+            .rev()
+            .find(|(action, _)| action == "SetAVTransportURI")
+            .unwrap()
+            .1["CurrentURIMetaData"];
+        assert!(metadata.contains("螺旋 现场版"));
+    }
+    assert!(fixture
+        .engine
+        .voice_command("播放本地视频原标题", None)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn removing_music_keeps_files_and_only_stops_the_current_track() {
+    let fixture = Fixture::new().await;
+    let first = fixture.import("first.mp3", b"first audio").await;
+    let second = fixture.import("second.mp3", b"second audio").await;
+    fixture.connect().await;
+    fixture.engine.play(&first).await.unwrap();
+    let uri = fixture.uri();
+    let before = fixture.renderer.lock().unwrap().actions.len();
+    let snapshot = fixture.engine.remove_track(second.clone()).await.unwrap();
+    assert_eq!(snapshot.current_track_id.as_deref(), Some(first.as_str()));
+    assert_eq!(fixture.renderer.lock().unwrap().actions.len(), before);
+    assert_eq!(
+        std::fs::read(fixture.directory.path().join("second.mp3")).unwrap(),
+        b"second audio"
+    );
+
+    fixture.renderer.lock().unwrap().fail_action = Some("Stop".into());
+    assert!(fixture
+        .engine
+        .remove_track(first.clone())
+        .await
+        .err()
+        .unwrap()
+        .contains("尚未移除"));
+    assert_eq!(fixture.engine.snapshot().await.unwrap().tracks.len(), 1);
+    fixture.renderer.lock().unwrap().fail_action = None;
+    let removed = fixture.engine.remove_track(first.clone()).await.unwrap();
+    assert!(removed.tracks.is_empty());
+    assert!(removed.current_track_id.is_none());
+    assert_eq!(removed.transport_state, "STOPPED");
+    assert_eq!(fixture.renderer.lock().unwrap().transport, "STOPPED");
+    assert_eq!(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(uri)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        std::fs::read(fixture.directory.path().join("first.mp3")).unwrap(),
+        b"first audio"
+    );
+    assert!(fixture.engine.play(&first).await.is_err());
+    assert!(fixture.engine.remove_track(first).await.is_err());
+    fixture
+        .engine
+        .import(vec![fixture.directory.path().join("first.mp3")])
+        .await
+        .unwrap();
+    assert_eq!(fixture.engine.snapshot().await.unwrap().tracks.len(), 1);
+}
+
+#[tokio::test]
 async fn renderer_fault_is_visible_and_does_not_report_playback_success() {
     let fixture = Fixture::new().await;
     let id = fixture.import("song.mp3", b"audio").await;

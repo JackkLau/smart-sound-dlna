@@ -1,6 +1,6 @@
 [package]
 name = "xiaomi-dlna-desktop"
-version = "0.3.0"
+version = "0.5.3"
 edition = "2021"
 rust-version = "1.90"
 description = "Local music casting for Xiaomi DLNA speakers"
@@ -12,6 +12,10 @@ crate-type = ["lib", "cdylib", "staticlib"]
 [[bin]]
 name = "xiaomi-dlna-desktop"
 path = "src/main.rs"
+required-features = ["desktop"]
+
+[[example]]
+name = "login_window_regression"
 required-features = ["desktop"]
 
 [features]
@@ -39,7 +43,10 @@ axum = "0.8"
 uuid = { version = "1", features = ["v4", "serde"] }
 walkdir = "2"
 md5 = "0.7"
+base64 = "0.22"
+ring = "0.17"
 tempfile = "3"
+lofty = "0.25.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

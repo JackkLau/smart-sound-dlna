@@ -53,6 +53,10 @@ struct Record {
     track: Track,
     path: PathBuf,
     identity: Identity,
+    #[serde(default)]
+    title_edited: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_title: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -128,6 +132,63 @@ impl Library {
 
     pub fn get(&self, id: &str) -> Result<Track, String> {
         self.record(id).map(|record| record.track.clone())
+    }
+
+    /// Remove only the allowlist entry; original and downloaded files stay intact.
+    pub fn remove(&mut self, id: &str) -> Result<(), String> {
+        let index = self
+            .records
+            .iter()
+            .position(|r| r.track.id == id)
+            .ok_or("这首音乐已不在曲库中，请刷新后重试。")?;
+        let record = self.records.remove(index);
+        if let Err(error) = self.save() {
+            self.records.insert(index, record);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn rename(&mut self, id: &str, title: &str, expected_title: &str) -> Result<Track, String> {
+        let title = crate::track_names::validate(title)?;
+        let record = self.record(id)?;
+        if record.track.title != expected_title {
+            return Err("曲名已发生变化，请重新打开修改窗口后再保存。".into());
+        }
+        let name_key = crate::track_names::key(&title);
+        if self
+            .records
+            .iter()
+            .any(|r| r.track.id != id && crate::track_names::key(&r.track.title) == name_key)
+        {
+            return Err("曲库已有同名音乐，请在名称中加上歌手或版本，方便语音区分。".into());
+        }
+        let index = self
+            .records
+            .iter()
+            .position(|r| r.track.id == id)
+            .ok_or("音乐已不在曲库中。")?;
+        let original = self.records[index].clone();
+        self.records[index].track.title = title;
+        self.records[index].title_edited = true;
+        if let Err(error) = self.save() {
+            self.records[index] = original;
+            return Err(error);
+        }
+        Ok(self.records[index].track.clone())
+    }
+
+    pub fn recognize_name(&self, id: &str) -> Result<crate::track_names::Suggestion, String> {
+        let record = self.record(id)?;
+        let stem = Path::new(&record.track.filename)
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&record.track.filename);
+        Ok(crate::track_names::recognize(
+            self.open_track(id)?,
+            record.source_title.as_deref().unwrap_or(stem),
+            record.track.source.is_some(),
+        ))
     }
 
     fn record(&self, id: &str) -> Result<&Record, String> {
@@ -279,8 +340,25 @@ impl Library {
             .iter_mut()
             .find(|r| r.path == canonical)
             .ok_or("下载文件未能入库")?;
-        record.track.title = title.chars().take(300).collect();
+        if !record.title_edited {
+            record.track.title = title.chars().take(300).collect();
+        }
+        record.source_title = Some(title.chars().take(300).collect());
         record.track.source = Some(source);
+        let id = record.track.id.clone();
+        if !record.title_edited {
+            if let Ok(suggestion) = self.recognize_name(&id) {
+                if let Some(title) = suggestion.title {
+                    self.records
+                        .iter_mut()
+                        .find(|r| r.track.id == id)
+                        .unwrap()
+                        .track
+                        .title = title;
+                }
+            }
+        }
+        let record = self.record(&id)?;
         let track = record.track.clone();
         if let Err(error) = self.save() {
             self.records = original;
@@ -348,6 +426,9 @@ impl Library {
                 .and_then(|name| name.to_str())
                 .unwrap_or(&filename)
                 .to_owned();
+            let title = crate::track_names::recognize(file, &title, false)
+                .title
+                .unwrap_or(title);
             let track = Track {
                 id: Uuid::new_v4().to_string(),
                 title,
@@ -361,6 +442,8 @@ impl Library {
                 track,
                 path: canonical,
                 identity: file_identity,
+                title_edited: false,
+                source_title: None,
             });
             summary.added += 1;
             Ok(())
@@ -615,6 +698,130 @@ mod tests {
         assert!(library.import_download(&path, "下载歌曲", source).is_err());
         assert!(library.tracks().is_empty());
         assert!(path.exists());
+    }
+
+    #[test]
+    fn removing_only_forgets_the_record_and_failed_save_restores_its_position() {
+        let (_directory, mut library, music) = setup();
+        let first = music.join("first.mp3");
+        fs::write(&first, b"original audio").unwrap();
+        fs::write(music.join("second.mp3"), b"second").unwrap();
+        library.import_paths(std::slice::from_ref(&music)).unwrap();
+        let original = library.tracks();
+        let id = &original[0].id;
+        library.remove(id).unwrap();
+        assert!(library.get(id).is_err());
+        assert_eq!(fs::read(&first).unwrap(), b"original audio");
+        let mut restored = Library::load(library.data_dir.clone()).unwrap();
+        assert_eq!(restored.tracks(), original[1..]);
+        restored.import_paths(std::slice::from_ref(&music)).unwrap();
+        assert_eq!(restored.tracks().len(), 2);
+        assert!(restored.remove("missing").is_err());
+        fs::remove_file(library.data_dir.join("library.json")).unwrap();
+        fs::create_dir(library.data_dir.join("library.json")).unwrap();
+        let before = restored.tracks();
+        assert!(restored.remove(&before[0].id).is_err());
+        assert_eq!(restored.tracks(), before);
+    }
+
+    #[test]
+    fn renamed_title_persists_and_reimport_preserves_it_without_changing_audio() {
+        let (_directory, mut library, music) = setup();
+        let file = music.join("杂乱的视频标题.mp3");
+        fs::write(&file, b"original audio").unwrap();
+        library.import_paths(std::slice::from_ref(&file)).unwrap();
+        let track = library.tracks()[0].clone();
+        library.rename(&track.id, "  螺旋  ", &track.title).unwrap();
+        library.import_paths(std::slice::from_ref(&file)).unwrap();
+        let restored = Library::load(library.data_dir.clone()).unwrap();
+        let renamed = restored.get(&track.id).unwrap();
+        assert_eq!(renamed.title, "螺旋");
+        assert_eq!(renamed.filename, track.filename);
+        assert_eq!(fs::read(file).unwrap(), b"original audio");
+        assert_eq!(
+            crate::voice::match_track("螺旋", &restored.tracks())
+                .unwrap()
+                .id,
+            track.id
+        );
+        assert!(crate::voice::match_track(&track.title, &restored.tracks()).is_err());
+    }
+
+    #[test]
+    fn downloaded_titles_are_recognized_and_manual_names_survive_reimport() {
+        let (_directory, mut library, music) = setup();
+        let path = music.join("BV123-456.m4a");
+        fs::write(&path, b"audio").unwrap();
+        let source = TrackSource {
+            provider: "bilibili".into(),
+            id: "BV123:456".into(),
+            url: "https://www.bilibili.com/video/BV123/".into(),
+        };
+        let track = library
+            .import_download(&path, "【4K修复】歌手《活着Viva》超清MV", source.clone())
+            .unwrap();
+        assert_eq!(track.title, "活着Viva");
+        library
+            .rename(&track.id, "活着 Viva 现场版", &track.title)
+            .unwrap();
+        library
+            .import_download(&path, "发布者改了视频标题", source)
+            .unwrap();
+        let restored = Library::load(library.data_dir.clone()).unwrap();
+        assert_eq!(restored.get(&track.id).unwrap().title, "活着 Viva 现场版");
+        assert_eq!(restored.tracks().len(), 1);
+        assert_eq!(fs::read(path).unwrap(), b"audio");
+    }
+
+    #[test]
+    fn old_index_loads_without_title_fields_and_recognition_checks_file_identity() {
+        let (_directory, mut library, music) = setup();
+        let path = music.join("歌手 - 晴天.mp3");
+        fs::write(&path, b"audio").unwrap();
+        library.import_paths(std::slice::from_ref(&path)).unwrap();
+        let track = library.tracks()[0].clone();
+        let index = library.data_dir.join("library.json");
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&index).unwrap()).unwrap();
+        for record in json["tracks"].as_array_mut().unwrap() {
+            record.as_object_mut().unwrap().remove("title_edited");
+            record.as_object_mut().unwrap().remove("source_title");
+        }
+        fs::write(&index, serde_json::to_vec(&json).unwrap()).unwrap();
+        let restored = Library::load(library.data_dir.clone()).unwrap();
+        assert_eq!(
+            restored.recognize_name(&track.id).unwrap().title.as_deref(),
+            Some("晴天")
+        );
+        fs::rename(&path, path.with_extension("old")).unwrap();
+        fs::write(path, b"replacement").unwrap();
+        assert!(restored.recognize_name(&track.id).is_err());
+        assert!(restored.recognize_name("missing").is_err());
+    }
+
+    #[test]
+    fn rename_validation_conflict_and_failed_save_leave_title_unchanged() {
+        let (_directory, mut library, music) = setup();
+        fs::write(music.join("first.mp3"), b"audio").unwrap();
+        fs::write(music.join("second.mp3"), b"audio").unwrap();
+        library.import_paths(&[music]).unwrap();
+        let tracks = library.tracks();
+        let track = &tracks[0];
+        for title in [
+            " ".to_owned(),
+            "!!!".to_owned(),
+            "a\nb".to_owned(),
+            "长".repeat(121),
+            tracks[1].title.to_uppercase(),
+        ] {
+            assert!(library.rename(&track.id, &title, &track.title).is_err());
+        }
+        assert!(library.rename(&track.id, "新歌", "过期名称").is_err());
+        assert!(library.rename("missing", "新歌", "").is_err());
+        fs::remove_file(library.data_dir.join("library.json")).unwrap();
+        fs::create_dir(library.data_dir.join("library.json")).unwrap();
+        assert!(library.rename(&track.id, "新歌", &track.title).is_err());
+        assert_eq!(library.tracks(), tracks);
     }
 
     #[cfg(unix)]

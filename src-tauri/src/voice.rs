@@ -48,10 +48,7 @@ pub enum Command {
 }
 
 fn normalized(text: &str) -> String {
-    text.chars()
-        .flat_map(char::to_lowercase)
-        .filter(|c| c.is_alphanumeric())
-        .collect()
+    crate::track_names::key(text)
 }
 
 pub fn parse(text: &str) -> Result<Command, String> {

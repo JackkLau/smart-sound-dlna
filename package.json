@@ -1,17 +1,18 @@
 {
   "name": "xiaomi-dlna-desktop",
-  "version": "0.3.0",
+  "version": "0.5.3",
   "private": true,
   "description": "小米音响本地音乐 · Rust / Tauri 2",
   "scripts": {
     "tauri": "node scripts/tauri.mjs",
     "dev": "node scripts/tauri.mjs dev",
     "build": "node scripts/tauri.mjs build",
-    "check:ui": "node --check frontend/app.js && node --check frontend/features.js",
+    "check:ui": "node --check frontend/app.js && node --check frontend/features.js && node --check frontend/import-selection.js && node --check frontend/imports.js && node --check frontend/track-editor.js && node --check frontend/library-actions.js",
     "test": "node scripts/cargo.mjs test --manifest-path src-tauri/Cargo.toml --locked",
     "test:core": "node scripts/cargo.mjs test --manifest-path src-tauri/Cargo.toml --locked --no-default-features",
     "lint": "node scripts/cargo.mjs clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings",
-    "fmt": "node scripts/cargo.mjs fmt --manifest-path src-tauri/Cargo.toml"
+    "fmt": "node scripts/cargo.mjs fmt --manifest-path src-tauri/Cargo.toml",
+    "test:ui": "node --test tests/*.test.cjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

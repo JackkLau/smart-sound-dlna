@@ -15,6 +15,7 @@ use url::{Host, Url};
 const XML_LIMIT: usize = 1024 * 1024;
 const XML_NODES_LIMIT: u32 = 20_000;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(4);
+const OPTIONAL_STATUS_TIMEOUT: Duration = Duration::from_secs(1);
 const SEARCH_WINDOW: Duration = Duration::from_secs(4);
 const SEARCH_RETRY: Duration = Duration::from_secs(2);
 const DESCRIPTION_WINDOW: Duration = Duration::from_secs(6);
@@ -1027,7 +1028,7 @@ impl Controller {
             current_uri: None,
             warnings: Vec::new(),
         };
-        match self.soap("GetPositionInfo", &[], false).await {
+        match self.read_optional("GetPositionInfo", &[], false).await {
             Ok(values) => {
                 let position = values.get("RelTime").and_then(|value| parse_time(value));
                 let duration = values
@@ -1050,7 +1051,7 @@ impl Controller {
         }
         if !self.device.rendering_control_url.is_empty() {
             match self
-                .soap("GetVolume", &[("Channel", "Master".into())], true)
+                .read_optional("GetVolume", &[("Channel", "Master".into())], true)
                 .await
             {
                 Ok(values) => {
@@ -1066,6 +1067,28 @@ impl Controller {
             }
         }
         Ok(status)
+    }
+
+    async fn read_optional(
+        &self,
+        action: &str,
+        arguments: &[(&str, String)],
+        rendering: bool,
+    ) -> Result<HashMap<String, String>, SoapFailure> {
+        // A slow optional reading must not delay a confirmed connection for
+        // several seconds. It remains a warning, not an offline verdict.
+        time::timeout(
+            OPTIONAL_STATUS_TIMEOUT,
+            self.soap(action, arguments, rendering),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(format!(
+                "音响读取{}超时，将稍后重试。",
+                if rendering { "音量" } else { "进度" }
+            )
+            .into())
+        })
     }
 }
 

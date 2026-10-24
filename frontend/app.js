@@ -17,7 +17,7 @@
   let deviceFormComposing = false;
   let config = null;
   let state = {
-    tracks: [], devices: [], selected_device_id: null, current_track_id: null,
+    tracks: [], devices: [], selected_device_id: null, device_connection: 'unselected', current_track_id: null,
     transport_state: 'STOPPED', position: 0, duration: 0, volume: null,
     status_error: null, warnings: [], queue_mode: 'sequential', discovering: false,
     discovery_error: null, interfaces: [], media_port: 0,
@@ -124,7 +124,7 @@
       polling = false;
     }
   }
-  async function mutate(command, args = {}, successMessage = '') {
+  async function mutate(command, args = {}, successMessage = '', { scopedError = false } = {}) {
     if (mutationBusy || !config || !connected) return null;
     mutationBusy = true;
     generation += 1;
@@ -142,8 +142,7 @@
       if (successMessage && data !== null) announce(successMessage);
       return data;
     } catch (error) {
-      actionError = messageOf(error);
-      renderErrors();
+      if (!scopedError) { actionError = messageOf(error); renderErrors(); }
       throw error;
     } finally {
       clearTimeout(slowTimer);
@@ -203,6 +202,7 @@
     if (signature !== trackSignature) {
       trackSignature = signature;
       const focusTrack = document.activeElement?.dataset?.trackId;
+      const focusAction = document.activeElement?.dataset?.trackAction;
       const rows = slice.map((track, index) => {
         const current = track.id === state.current_track_id;
         const row = element('li', `track-row${current ? ' current' : ''}`);
@@ -216,49 +216,75 @@
         const play = element('button', 'icon-button track-play');
         play.type = 'button';
         play.dataset.trackId = track.id;
+        play.dataset.trackAction = 'play';
         play.setAttribute('aria-label', `播放 ${track.title || track.filename}`);
         play.title = `播放 ${track.title || track.filename}`;
         play.append(icon('play'));
         play.addEventListener('click', () => playTrack(track.id));
-        row.append(main, element('span', 'track-format', (track.format || '').toUpperCase()), element('span', 'track-size', formatSize(track.size)), play);
+        const edit = element('button', 'text-button track-edit', '曲名');
+        edit.type = 'button'; edit.dataset.trackId = track.id; edit.dataset.trackAction = 'edit';
+        edit.setAttribute('aria-label', `识别或修改曲名：${track.title || track.filename}`);
+        edit.title = '识别或修改曲名';
+        edit.addEventListener('click', () => window.MusicTrackEditor?.open(track, edit));
+        const remove = element('button', 'text-button track-remove', '移除');
+        remove.type = 'button'; remove.dataset.trackId = track.id; remove.dataset.trackAction = 'remove';
+        remove.setAttribute('aria-label', `移出曲库：${track.title || track.filename}`);
+        remove.title = '移出曲库，保留音频文件';
+        remove.addEventListener('click', () => window.MusicLibraryActions?.openRemove(track, index));
+        const actions = element('div', 'track-actions'); actions.append(edit, remove);
+        // A native button fills the row; secondary controls remain siblings.
+        row.append(play, main, element('span', 'track-format', (track.format || '').toUpperCase()), element('span', 'track-size', formatSize(track.size)), actions);
         return row;
       });
       $('tracks').replaceChildren(...rows);
-      if (focusTrack) [...$('tracks').querySelectorAll('button')].find((button) => button.dataset.trackId === focusTrack)?.focus({ preventScroll: true });
+      if (focusTrack) [...$('tracks').querySelectorAll('button')].find((button) => button.dataset.trackId === focusTrack && button.dataset.trackAction === focusAction)?.focus({ preventScroll: true });
     }
     renderTrackControls();
   }
   function renderTrackControls() {
-    const disabled = !connected || !config || !state.selected_device_id || mutationBusy || importPending;
+    const reason = speakerUnavailableReason();
+    const disabled = !connected || !config || Boolean(reason) || mutationBusy || importPending;
     document.querySelectorAll('.track-play').forEach((button) => {
       button.disabled = disabled;
-      button.title = !state.selected_device_id ? '请先连接音响' : button.getAttribute('aria-label');
+      button.title = reason || button.getAttribute('aria-label');
     });
-    $('library-caption').textContent = state.tracks.length && !state.selected_device_id ? '先连接音响，再播放音乐' : '本地音乐 · 直接推流';
+    document.querySelectorAll('.track-edit, .track-remove').forEach((button) => {
+      button.disabled = !connected || !config || mutationBusy || importPending;
+    });
+    $('library-caption').textContent = state.tracks.length && reason ? reason : '本地音乐 · 直接推流';
+  }
+  function speakerUnavailableReason() {
+    if (!state.selected_device_id) return '先连接音响，再播放音乐';
+    if (state.device_connection === 'disconnected') return '音响已断开，正在自动重连';
+    if (state.device_connection !== 'connected') return '正在确认音响连接…';
+    return '';
   }
   function renderDiscovery() {
     const discovering = Boolean(state.discovering || discoveryPending);
     $('discover').setAttribute('aria-busy', String(discovering));
-    $('discover').querySelector('span').textContent = discovering ? '正在搜索音响' : '重新搜索音响';
+    $('discover').querySelector('span').textContent = discovering ? '正在搜索音响' : state.device_connection === 'connected' ? '搜索其他音响' : '重新搜索音响';
     if (!desktopAvailable) $('device-hint').textContent = '通过桌面客户端自动搜索音响';
     else if (connectionError) $('device-hint').textContent = '客户端未就绪，暂时无法搜索';
+    else if (state.device_connection === 'disconnected') $('device-hint').textContent = '连接已断开，正在自动重连；点击当前音响可立即重试';
     else if (discovering) $('device-hint').textContent = discoveryPending ? '正在重新搜索局域网音响…' : '正在自动发现局域网音响…';
+    else if (state.device_connection === 'checking') $('device-hint').textContent = '正在确认音响连接…';
+    else if (state.device_connection === 'connected') $('device-hint').textContent = '已连接 · 需要更换设备时手动搜索';
     else if (state.discovery_error) $('device-hint').textContent = '搜索未完成，可重新搜索或手动添加';
     else if (state.devices.length) {
       const proCount = state.devices.filter((device) => device.is_xiaomi_pro).length;
       $('device-hint').textContent = proCount ? `发现 ${state.devices.length} 台音响，含 ${proCount} 台小爱音箱 Pro` : `发现 ${state.devices.length} 台音响，点击即可连接`;
-    } else $('device-hint').textContent = loaded ? '暂未发现音响，每 30 秒自动重搜' : '启动后自动发现局域网音响';
+    } else $('device-hint').textContent = loaded ? '暂未发现音响，可重新搜索或手动添加' : '启动后自动发现局域网音响';
   }
   function renderDevices() {
     const device = state.devices.find((item) => item.id === state.selected_device_id);
     $('device-title').textContent = device?.name || '连接你的音响';
     $('device-subtitle').textContent = device
-      ? [device.model, device.address].filter(Boolean).join(' · ') || '已选择，随时可以播放'
+      ? [state.device_connection === 'disconnected' ? '已断开 · 自动重连中' : state.device_connection === 'checking' ? '正在连接' : '已连接', device.model, device.address].filter(Boolean).join(' · ')
       : '让喜欢的音乐，回到房间里。';
-    document.querySelector('.speaker-art').classList.toggle('connected', Boolean(device));
+    document.querySelector('.speaker-art').classList.toggle('connected', Boolean(device) && state.device_connection === 'connected');
     renderDiscovery();
     const devices = [...state.devices].sort((a, b) => Number(Boolean(b.is_xiaomi_pro)) - Number(Boolean(a.is_xiaomi_pro)) || Number(Boolean(b.is_xiaomi)) - Number(Boolean(a.is_xiaomi)));
-    const signature = JSON.stringify([devices, state.selected_device_id]);
+    const signature = JSON.stringify([devices, state.selected_device_id, state.device_connection]);
     if (signature === deviceSignature) return;
     deviceSignature = signature;
     const focusDevice = document.activeElement?.dataset?.deviceId;
@@ -267,18 +293,20 @@
       button.type = 'button';
       button.dataset.deviceId = item.id;
       button.setAttribute('aria-pressed', String(item.id === state.selected_device_id));
-      button.setAttribute('aria-label', `${item.id === state.selected_device_id ? '已选择' : '选择'} ${item.name}${item.is_xiaomi_pro ? '，小爱音箱 Pro' : ''}`);
+      const selected = item.id === state.selected_device_id;
+      const statusLabel = state.device_connection === 'disconnected' ? '连接已断开，点击重试' : state.device_connection === 'checking' ? '正在连接' : '已连接';
+      button.setAttribute('aria-label', `${selected ? statusLabel : '选择'} ${item.name}${item.is_xiaomi_pro ? '，小爱音箱 Pro' : ''}`);
       const label = element('span', 'device-label');
       const name = element('span', 'device-name-line');
       name.append(element('strong', '', item.name));
       if (item.is_xiaomi_pro) name.append(element('span', 'device-badge', '小爱 Pro'));
       else if (item.is_xiaomi) name.append(element('span', 'device-badge', '小米'));
-      label.append(name, element('small', '', item.model || item.address || 'DLNA 音响'));
+      label.append(name, element('small', '', selected ? statusLabel : item.model || item.address || 'DLNA 音响'));
       button.append(icon('speaker'), label);
-      if (item.id === state.selected_device_id) button.append(icon('check', 'small check'));
+      if (selected && state.device_connection === 'connected') button.append(icon('check', 'small check'));
       button.addEventListener('click', async () => {
-        if (item.id === state.selected_device_id) return;
-        try { await mutate('select_device', { deviceId: item.id }, `已选择 ${item.name}`); }
+        if (item.id === state.selected_device_id && state.device_connection !== 'disconnected') return;
+        try { await mutate('select_device', { deviceId: item.id }, `正在连接 ${item.name}`); }
         catch { /* Persistent recovery message is already shown. */ }
       });
       return button;
@@ -288,17 +316,18 @@
   }
   function renderControls() {
     const available = Boolean(connected && config);
-    const ready = available && Boolean(state.selected_device_id) && !mutationBusy && !importPending;
+    const speakerReason = speakerUnavailableReason();
+    const ready = available && !speakerReason && !mutationBusy && !importPending;
     const current = state.tracks.find((track) => track.id === state.current_track_id);
     const device = state.devices.find((item) => item.id === state.selected_device_id);
     const playing = Boolean(current) && state.transport_state === 'PLAYING';
     const paused = Boolean(current) && state.transport_state === 'PAUSED_PLAYBACK';
     const externalPlayback = !current && ['PLAYING', 'PAUSED_PLAYBACK'].includes(state.transport_state);
     const transitioning = state.transport_state === 'TRANSITIONING';
-    const transportLabels = { PLAYING: '正在播放', PAUSED_PLAYBACK: '已暂停', STOPPED: '已停止', TRANSITIONING: '正在连接音响…' };
+    const transportLabels = { PLAYING: '正在播放', PAUSED_PLAYBACK: '已暂停', STOPPED: '已停止', TRANSITIONING: '正在准备播放…' };
     $('now-title').textContent = current ? current.title || current.filename
       : externalPlayback ? state.transport_state === 'PLAYING' ? '音响正在播放其他内容' : '音响已暂停其他内容' : '还没有播放音乐';
-    $('now-subtitle').textContent = current
+    $('now-subtitle').textContent = state.selected_device_id && speakerReason ? speakerReason : current
       ? `${transportLabels[state.transport_state] || '准备播放'}${device ? ` · ${device.name}` : ''}`
       : externalPlayback ? '选择本地音乐，即可切换播放'
       : device ? `播放到 ${device.name}` : '连接音响，选一首喜欢的歌';
@@ -307,7 +336,7 @@
     $('play-icon').setAttribute('href', playing ? '#i-pause' : '#i-play');
     const playLabel = playing ? '暂停' : paused ? '继续播放' : '播放';
     $('play-pause').setAttribute('aria-label', playLabel);
-    $('play-pause').title = !device ? '请先连接音响' : playLabel;
+    $('play-pause').title = speakerReason || playLabel;
     $('play-pause').disabled = !ready || !state.tracks.length || transitioning;
     $('play-pause').setAttribute('aria-busy', String(transitioning || mutationBusy));
     $('stop').disabled = !ready || !current || state.transport_state === 'STOPPED';
@@ -473,7 +502,7 @@
   }
   $('retry-connection').addEventListener('click', connect);
   // Shared service seam for extension dialogs; no second notification system.
-  window.MusicUI = { invoke, announce, refresh, messageOf, formatSize, formatTime, element };
+  window.MusicUI = { invoke, mutate, announce, refresh, messageOf, formatSize, formatTime, element };
   // Controls only become actionable once their handlers have been attached.
   document.querySelectorAll('button').forEach((button) => { button.disabled = false; });
   renderLibrary();

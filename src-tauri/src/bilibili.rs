@@ -8,7 +8,7 @@ use std::{
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{Arc, Weak},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::AsyncWriteExt,
@@ -17,9 +17,15 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+#[cfg(test)]
+mod anonymous_tests;
+mod favorites;
+pub use favorites::{BatchResult, BatchSelection, FavoriteFolder, FavoritePage};
+
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const MAX_AUDIO: u64 = 1024 * 1024 * 1024;
 const PREVIEW_TTL: u64 = 30 * 60 * 1000;
+const MAX_QUEUE: usize = 100;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Part {
@@ -67,6 +73,8 @@ pub struct Downloader {
     directory: PathBuf,
     client: reqwest::Client,
     cookie: Mutex<String>,
+    visitor_cookie: Mutex<String>,
+    wbi: Mutex<Option<(Instant, String)>>,
     previews: Mutex<HashMap<String, Preview>>,
     jobs: Mutex<Vec<JobEntry>>,
     queue: Semaphore,
@@ -80,6 +88,8 @@ impl Downloader {
             directory: data_dir.join("downloads"),
             client: online::client(UA)?,
             cookie: Mutex::new(String::new()),
+            visitor_cookie: Mutex::new(String::new()),
+            wbi: Mutex::new(None),
             previews: Mutex::new(HashMap::new()),
             jobs: Mutex::new(Vec::new()),
             queue: Semaphore::new(1),
@@ -119,6 +129,64 @@ impl Downloader {
         self.cookie.lock().await.clear();
     }
 
+    /// Server-issued visitor identifiers are not an account session. Keep them
+    /// separate so anonymous imports never claim login or inherit account data.
+    async fn request_cookie(&self) -> Result<String, String> {
+        let account = self.cookie.lock().await.clone();
+        if !account.is_empty() {
+            return Ok(account);
+        }
+        let mut visitor = self.visitor_cookie.lock().await;
+        if visitor.is_empty() {
+            let response = self.api("/x/frontend/finger/spi", &[], "").await?;
+            check_code(&response)?;
+            let value = |key: &str| {
+                response["data"][key]
+                    .as_str()
+                    .filter(|s| {
+                        !s.is_empty()
+                            && s.len() <= 512
+                            && s.bytes().all(|b| b.is_ascii_graphic() && b != b';')
+                    })
+                    .ok_or("Bilibili 匿名访客信息无效，请稍后重试。")
+            };
+            let raw = format!("buvid3={}; buvid4={}", value("b_3")?, value("b_4")?);
+            *visitor = online::cookies(&raw, &["buvid3", "buvid4"])
+                .map_err(|_| "Bilibili 匿名访客信息无效，请稍后重试。")?;
+        }
+        Ok(visitor.clone())
+    }
+
+    async fn signed_api(
+        &self,
+        path: &str,
+        params: BTreeMap<String, String>,
+        cookie: &str,
+    ) -> Result<Value, String> {
+        // The public key is present even when nav reports anonymous code -101.
+        // Serialize refreshes and briefly cache it across previews and downloads.
+        let key = {
+            let mut cached = self.wbi.lock().await;
+            if let Some((_, key)) = cached
+                .as_ref()
+                .filter(|(created, _)| created.elapsed() < Duration::from_secs(30))
+            {
+                key.clone()
+            } else {
+                let nav = self.api("/x/web-interface/nav", &[], cookie).await?;
+                let key = wbi_key(&nav["data"]["wbi_img"])?;
+                *cached = Some((Instant::now(), key.clone()));
+                key
+            }
+        };
+        self.api(
+            path,
+            &sign_wbi(params, &key, online::now_ms() / 1000),
+            cookie,
+        )
+        .await
+    }
+
     fn endpoint(&self, url: Url) -> Url {
         #[cfg(test)]
         if let Some(origin) = &self.test_origin {
@@ -149,19 +217,21 @@ impl Downloader {
             )
             .query(params)
             .header(reqwest::header::REFERER, "https://www.bilibili.com/")
+            .header(reqwest::header::ORIGIN, "https://www.bilibili.com")
             .timeout(Duration::from_secs(25));
         let request = if cookie.is_empty() {
             request
         } else {
             request.header(reqwest::header::COOKIE, cookie)
         };
-        online::json(
-            request
-                .send()
-                .await
-                .map_err(|_| "Bilibili 连接失败，请检查网络后重试。")?,
-        )
-        .await
+        let response = request
+            .send()
+            .await
+            .map_err(|_| "Bilibili 连接失败，请检查网络后重试。")?;
+        if matches!(response.status().as_u16(), 403 | 412 | 429) {
+            return Err("Bilibili 请求暂时受限，请稍后重试。".into());
+        }
+        online::json(response).await
     }
 
     pub async fn parse(&self, input: &str) -> Result<Preview, String> {
@@ -191,16 +261,20 @@ impl Downloader {
         let Input::Video { key, value, page } = input else {
             unreachable!()
         };
-        let cookie = self.cookie.lock().await.clone();
+        let cookie = self.request_cookie().await?;
         let data = self
-            .api("/x/web-interface/view", &[(key.into(), value)], &cookie)
+            .signed_api(
+                "/x/web-interface/wbi/view/detail",
+                BTreeMap::from([(key.into(), value), ("platform".into(), "web".into())]),
+                &cookie,
+            )
             .await?;
         check_code(&data)?;
-        let mut preview = parse_preview(&data["data"], page)?;
+        let mut preview = parse_preview(&data["data"]["View"], page)?;
         preview.id = uuid::Uuid::new_v4().to_string();
         let mut previews = self.previews.lock().await;
         previews.retain(|_, p| online::now_ms().saturating_sub(p.created) < PREVIEW_TTL);
-        if previews.len() >= 10 {
+        if previews.len() >= 128 {
             if let Some(oldest) = previews
                 .values()
                 .min_by_key(|p| p.created)
@@ -281,10 +355,25 @@ impl Downloader {
         }) {
             return Err("这个分 P 已在下载队列中。".into());
         }
-        if jobs.iter().filter(|j| active_phase(&j.view.phase)).count() >= 10 {
-            return Err("最多同时排队 10 个任务，请等待部分任务完成。".into());
+        // A worker may finish between the library snapshot and this lock.
+        if jobs.iter().any(|j| {
+            j.preview.bvid == preview.bvid && j.part.cid == part.cid && j.view.phase == "completed"
+        }) {
+            // Completed jobs are history: a user may since have removed the
+            // track. Recheck the library under this lock to retain race safety.
+            let active = engine.upgrade().ok_or("客户端正在退出")?;
+            if active.snapshot().await?.tracks.iter().any(|t| {
+                t.source
+                    .as_ref()
+                    .is_some_and(|s| s.provider == "bilibili" && s.id == source_id)
+            }) {
+                return Err("这个分 P 已在曲库中，可直接搜索播放。".into());
+            }
         }
-        if jobs.len() >= 30 {
+        if jobs.iter().filter(|j| active_phase(&j.view.phase)).count() >= MAX_QUEUE {
+            return Err("最多排队 100 首，请等待部分任务完成后重试。".into());
+        }
+        if jobs.len() >= 200 {
             if let Some(index) = jobs.iter().position(|j| !active_phase(&j.view.phase)) {
                 jobs.remove(index);
             }
@@ -375,7 +464,10 @@ impl Downloader {
     ) -> Result<(String, String), String> {
         let _permit = tokio::select! { _ = entry.cancel.cancelled() => return Err("已取消".into()), p = self.queue.acquire() => p.map_err(|_| "下载队列已关闭")? };
         self.update(&entry.view.id, "resolving", 0, None).await;
-        let cookie = self.cookie.lock().await.clone();
+        let cookie = tokio::select! {
+            _ = entry.cancel.cancelled() => return Err("已取消".into()),
+            cookie = self.request_cookie() => cookie?,
+        };
         let audio = tokio::select! {
             _ = entry.cancel.cancelled() => return Err("已取消".into()),
             audio = self.audio(&entry.preview.bvid, entry.part.cid, &cookie) => audio?,
@@ -515,9 +607,6 @@ impl Downloader {
         }
     }
     async fn audio(&self, bvid: &str, cid: u64, cookie: &str) -> Result<Audio, String> {
-        // Anonymous nav replies code -101 but still includes the public WBI keys.
-        let nav = self.api("/x/web-interface/nav", &[], cookie).await?;
-        let key = wbi_key(&nav["data"]["wbi_img"])?;
         let params = BTreeMap::from([
             ("bvid".into(), bvid.into()),
             ("cid".into(), cid.to_string()),
@@ -525,8 +614,9 @@ impl Downloader {
             ("fnver".into(), "0".into()),
             ("fourk".into(), "0".into()),
         ]);
-        let params = sign_wbi(params, &key, online::now_ms() / 1000);
-        let data = self.api("/x/player/wbi/playurl", &params, cookie).await?;
+        let data = self
+            .signed_api("/x/player/wbi/playurl", params, cookie)
+            .await?;
         check_code(&data)?;
         if data["data"]["is_preview"].as_bool() == Some(true) {
             return Err("该内容仅提供试听，请在 Bilibili 确认访问权限。".into());
@@ -626,7 +716,9 @@ fn parse_input(raw: &str) -> Result<Input, String> {
         segments.remove(0);
     }
     if segments.len() < 2 || segments[0] != "video" {
-        return Err("请使用普通投稿视频页链接，暂不支持番剧、直播或收藏夹。".into());
+        return Err(
+            "请使用普通投稿视频链接；收藏夹请切换到“收藏夹”入口，暂不支持番剧或直播。".into(),
+        );
     }
     let page = url
         .query_pairs()
@@ -653,9 +745,7 @@ fn check_code(data: &Value) -> Result<(), String> {
             Err("该视频需要有效登录或访问权限，请在 Bilibili 登录后重试。".into())
         }
         Some(-404) | Some(62002) => Err("视频不存在、已删除或不可访问，请换一个链接。".into()),
-        Some(-352) | Some(-412) | Some(-401) => {
-            Err("Bilibili 暂时限制了请求，请稍后重试，也可先登录账号。".into())
-        }
+        Some(-352) | Some(-412) | Some(-401) => Err("Bilibili 请求暂时受限，请稍后重试。".into()),
         Some(code) => Err(format!("Bilibili 未提供此内容（错误码 {code}）。")),
         None => Err("Bilibili 返回格式已改变，解析未完成。".into()),
     }
@@ -1006,8 +1096,8 @@ mod tests {
                 "/x/web-interface/nav" => {
                     json!({"code":0,"data":{"isLogin":true,"wbi_img":{"img_url":"https://i.example/7cd084941338484aae1ad9425b84077c.png","sub_url":"https://i.example/4932caff0ff746eab6f01bf08b70ac45.png"}}})
                 }
-                "/x/web-interface/view" => {
-                    json!({"code":0,"data":{"bvid":"BV1xx411c7mD","title":"测试视频","owner":{"name":"作者"},"pages":[{"cid":10,"page":1,"part":"自创一","duration":10},{"cid":20,"page":2,"part":"自创二","duration":10},{"cid":30,"page":3,"part":"下载取消测试","duration":10}]}})
+                "/x/web-interface/wbi/view/detail" => {
+                    json!({"code":0,"data":{"View":{"bvid":"BV1xx411c7mD","title":"测试视频","owner":{"name":"作者"},"pages":[{"cid":10,"page":1,"part":"自创一","duration":10},{"cid":20,"page":2,"part":"自创二","duration":10},{"cid":30,"page":3,"part":"下载取消测试","duration":10}]}}})
                 }
                 "/x/player/wbi/playurl" => {
                     assert!(query.contains_key("w_rid"));

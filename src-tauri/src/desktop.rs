@@ -1,6 +1,7 @@
 use crate::{
     engine::{Engine, Snapshot},
     library::{self, ImportSummary},
+    login::{self, Attempt, LoginFlow, LoginStatus, Phase},
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -10,6 +11,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::Duration,
 };
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -17,6 +19,18 @@ use tauri_plugin_dialog::DialogExt;
 struct AppState {
     engine: Arc<Engine>,
     picker_busy: Arc<AtomicBool>,
+    xiaomi_login: Arc<LoginFlow>,
+    bilibili_login: Arc<LoginFlow>,
+}
+
+impl AppState {
+    fn login(&self, provider: &str) -> Result<Arc<LoginFlow>, String> {
+        match provider {
+            "xiaomi" => Ok(self.xiaomi_login.clone()),
+            "bilibili" => Ok(self.bilibili_login.clone()),
+            _ => Err("不支持的登录服务".into()),
+        }
+    }
 }
 
 #[tauri::command]
@@ -42,6 +56,32 @@ async fn select_device(device_id: String, state: State<'_, AppState>) -> Result<
 #[tauri::command]
 async fn play_track(track_id: String, state: State<'_, AppState>) -> Result<Snapshot, String> {
     state.engine.play(&track_id).await
+}
+
+#[tauri::command]
+async fn rename_track(
+    track_id: String,
+    title: String,
+    expected_title: String,
+    state: State<'_, AppState>,
+) -> Result<Snapshot, String> {
+    state
+        .engine
+        .rename_track(track_id, title, expected_title)
+        .await
+}
+
+#[tauri::command]
+async fn remove_track(track_id: String, state: State<'_, AppState>) -> Result<Snapshot, String> {
+    state.engine.remove_track(track_id).await
+}
+
+#[tauri::command]
+async fn recognize_track_name(
+    track_id: String,
+    state: State<'_, AppState>,
+) -> Result<crate::track_names::Suggestion, String> {
+    state.engine.recognize_track_name(track_id).await
 }
 
 #[tauri::command]
@@ -149,12 +189,18 @@ pub fn run() {
         add_device,
         select_device,
         play_track,
+        rename_track,
+        remove_track,
+        recognize_track_name,
         control,
         pick_music_files,
         pick_music_folder,
         get_features,
         parse_bilibili,
         download_bilibili,
+        list_bilibili_folders,
+        read_bilibili_favorite,
+        download_bilibili_batch,
         cancel_download,
         retry_download,
         open_provider_login,
@@ -179,6 +225,8 @@ pub fn run() {
             app.manage(AppState {
                 engine,
                 picker_busy: Arc::new(AtomicBool::new(false)),
+                xiaomi_login: Arc::default(),
+                bilibili_login: Arc::default(),
             });
             Ok(())
         })
@@ -196,6 +244,8 @@ pub fn run() {
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
             if let Some(state) = app.try_state::<AppState>() {
+                state.xiaomi_login.reset();
+                state.bilibili_login.reset();
                 state.engine.shutdown();
             }
         }
@@ -205,6 +255,8 @@ pub fn run() {
 #[derive(Serialize)]
 struct Features {
     voice: crate::voice::VoiceState,
+    xiaomi_login: LoginStatus,
+    bilibili_login: LoginStatus,
     downloads: crate::bilibili::DownloadState,
     selected_device_id: Option<String>,
     selected_device_name: Option<String>,
@@ -219,6 +271,8 @@ async fn get_features(state: State<'_, AppState>) -> Result<Features, String> {
         .map(|d| d.name.clone());
     Ok(Features {
         voice: state.engine.voice.state().await,
+        xiaomi_login: state.xiaomi_login.status(),
+        bilibili_login: state.bilibili_login.status(),
         downloads: state.engine.downloads.state().await,
         selected_device_id: snapshot.selected_device_id,
         selected_device_name: name,
@@ -244,6 +298,35 @@ async fn download_bilibili(
             Arc::downgrade(&state.engine),
             &preview_id,
             cid,
+            state.engine.cancellation(),
+        )
+        .await
+}
+#[tauri::command]
+async fn list_bilibili_folders(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::bilibili::FavoriteFolder>, String> {
+    state.engine.downloads.favorite_folders().await
+}
+#[tauri::command]
+async fn read_bilibili_favorite(
+    url: String,
+    page: u32,
+    state: State<'_, AppState>,
+) -> Result<crate::bilibili::FavoritePage, String> {
+    state.engine.downloads.favorite_page(&url, page).await
+}
+#[tauri::command]
+async fn download_bilibili_batch(
+    selections: Vec<crate::bilibili::BatchSelection>,
+    state: State<'_, AppState>,
+) -> Result<crate::bilibili::BatchResult, String> {
+    state
+        .engine
+        .downloads
+        .start_batch(
+            Arc::downgrade(&state.engine),
+            selections,
             state.engine.cancellation(),
         )
         .await
@@ -297,14 +380,194 @@ fn login_host(provider: &str, url: &url::Url) -> bool {
         .iter()
         .any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
+// Read the ephemeral webview's native cookie store off the UI thread. Reading
+// document.cookie would miss HttpOnly credentials; cookies_for_url in Wry 0.57
+// also drops parent-domain cookies on macOS.
+enum LoginCredential {
+    Service(String),
+    XiaomiAccount(String),
+}
+
+async fn read_login_cookie(
+    window: tauri::WebviewWindow,
+    provider: String,
+    page: Arc<crate::login_webview::LoginPage>,
+) -> Result<Option<LoginCredential>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let observation = page.observe(&window)?;
+        let cookies = observation.cookies;
+        if let Some(cookie) = login::session_cookie(&provider, &cookies) {
+            return Ok(Some(LoginCredential::Service(cookie)));
+        }
+        if provider == "xiaomi" {
+            if let Some(account) = crate::xiaomi_login::account_cookie(&cookies) {
+                return Ok(Some(LoginCredential::XiaomiAccount(account)));
+            }
+            if observation.service_callback {
+                return Err(
+                    "已返回小爱登录页，但未取得小米账号授权会话。请重新打开登录窗口后重试。".into(),
+                );
+            }
+        }
+        Ok(None)
+    })
+    .await
+    .map_err(|_| "无法读取登录会话，请重试。".to_owned())?
+}
+
+async fn clear_provider(engine: &Engine, provider: &str) {
+    if provider == "xiaomi" {
+        engine.voice.disable(true).await;
+    } else {
+        engine.downloads.disconnect().await;
+    }
+}
+
+// Caller holds the provider gate. Automatic and manual completion use the same
+// path; only a server-validated session may close the login window.
+async fn complete_login(
+    app: &tauri::AppHandle,
+    engine: &Engine,
+    provider: &str,
+    flow: &LoginFlow,
+    attempt: &Attempt,
+) -> Result<bool, String> {
+    if attempt.cancel.is_cancelled() {
+        return Ok(false);
+    }
+    let (label, _, _) = provider_info(provider)?;
+    let Some(window) = app.get_webview_window(label) else {
+        flow.window_closed(attempt);
+        return Ok(false);
+    };
+    let read = tokio::select! {
+        biased;
+        _ = attempt.cancel.cancelled() => return Ok(false),
+        result = tokio::time::timeout(Duration::from_secs(10), read_login_cookie(window.clone(), provider.to_owned(), attempt.page.clone())) => result.map_err(|_| "读取登录会话超时，请重试。".to_owned())?,
+    };
+    let Some(credential) = read? else {
+        return Ok(false);
+    };
+    let validation = async {
+        let raw = match credential {
+            LoginCredential::Service(cookie) => cookie,
+            LoginCredential::XiaomiAccount(account) => {
+                crate::xiaomi_login::exchange(&account).await?
+            }
+        };
+        if provider == "xiaomi" {
+            engine.voice.connect(&raw).await.map(|_| ())
+        } else {
+            engine.downloads.set_session(&raw).await
+        }
+    };
+    let result = flow
+        .complete(attempt, validation, || {
+            let closed = window
+                .close()
+                .map_err(|_| "账号已连接，请手动关闭登录窗口。".to_owned());
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.set_focus();
+            }
+            closed
+        })
+        .await?;
+    match result {
+        login::Completion::Connected => Ok(true),
+        login::Completion::Cancelled { clear_session } => {
+            if clear_session {
+                clear_provider(engine, provider).await;
+            }
+            Ok(false)
+        }
+    }
+}
+
+fn monitor_login(
+    app: tauri::AppHandle,
+    engine: Arc<Engine>,
+    provider: String,
+    flow: Arc<LoginFlow>,
+    attempt: Attempt,
+) {
+    tauri::async_runtime::spawn(async move {
+        let started = tokio::time::Instant::now();
+        let deadline = started + Duration::from_secs(600);
+        let shutdown = engine.cancellation();
+        loop {
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => break,
+                _ = attempt.cancel.cancelled() => break,
+                _ = tokio::time::sleep(Duration::from_millis(750)) => {}
+            }
+            let _guard = flow.gate.lock().await;
+            if attempt.cancel.is_cancelled() || flow.status().phase == Phase::Connected {
+                break;
+            }
+            let result = if tokio::time::Instant::now() >= deadline {
+                Err("登录等待超时，请重新打开登录窗口后重试。".into())
+            } else {
+                match complete_login(&app, &engine, &provider, &flow, &attempt).await {
+                    Ok(false) => attempt
+                        .page
+                        .load_error(started.elapsed())
+                        .map_or(Ok(false), |error| Err(error.to_owned())),
+                    result => result,
+                }
+            };
+            match result {
+                Ok(true) => break,
+                Ok(false) => {}
+                Err(error) => {
+                    flow.update(&attempt, Phase::Failed, Some(error));
+                    // Surface errors in the main dialog; keep the original
+                    // login webview alive so a manual retry retains its cookies.
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.set_focus();
+                    }
+                    break;
+                }
+            }
+        }
+    });
+}
+
 #[tauri::command]
-async fn open_provider_login(provider: String, app: tauri::AppHandle) -> Result<(), String> {
+async fn open_provider_login(
+    provider: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let (label, title, url) = provider_info(&provider)?;
+    let flow = state.login(&provider)?;
+    let _guard = flow.gate.lock().await;
     if let Some(window) = app.get_webview_window(label) {
         window.show().map_err(|e| e.to_string())?;
-        return window.set_focus().map_err(|e| e.to_string());
+        window.set_focus().map_err(|e| e.to_string())?;
+        if matches!(flow.status().phase, Phase::Waiting | Phase::Checking) {
+            return Ok(());
+        }
+        // Resume monitoring a failed attempt without discarding its session.
+        let attempt = flow.retry_in_window();
+        watch_login_close(&window, flow.clone(), attempt.clone());
+        if !attempt.page.has_loaded()
+            && window
+                .navigate(url.parse().map_err(|_| "登录地址无效")?)
+                .is_err()
+        {
+            let error = "无法重新加载登录网页，请关闭登录窗口后重试。".to_owned();
+            flow.update(&attempt, Phase::Failed, Some(error.clone()));
+            return Err(error);
+        }
+        monitor_login(app, state.engine.clone(), provider, flow.clone(), attempt);
+        return Ok(());
     }
-    tauri::WebviewWindowBuilder::new(
+    let attempt = flow.begin();
+    let nav_provider = provider.clone();
+    let load_provider = provider.clone();
+    let load_page = attempt.page.clone();
+    let result = tauri::WebviewWindowBuilder::new(
         &app,
         label,
         tauri::WebviewUrl::External(url.parse().map_err(|_| "登录地址无效")?),
@@ -314,74 +577,80 @@ async fn open_provider_login(provider: String, app: tauri::AppHandle) -> Result<
     .min_inner_size(400.0, 520.0)
     .incognito(true)
     .disable_drag_drop_handler()
-    .on_navigation(move |url| login_host(&provider, url))
+    .on_navigation(move |url| login_host(&nav_provider, url))
+    .on_page_load(move |_, payload| {
+        if payload.event() == tauri::webview::PageLoadEvent::Finished
+            && login_host(&load_provider, payload.url())
+        {
+            // Use the callback after navigation finishes, so pending redirects
+            // and cookies are not mistaken for a failed login.
+            load_page
+                .loaded(load_provider == "xiaomi" && crate::xiaomi_login::is_sts(payload.url()));
+        }
+    })
     .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
-    .build()
-    .map_err(|e| format!("无法打开登录窗口：{e}"))?;
-    Ok(())
+    .build();
+    match result {
+        Ok(window) => {
+            watch_login_close(&window, flow.clone(), attempt.clone());
+            monitor_login(app, state.engine.clone(), provider, flow.clone(), attempt);
+            Ok(())
+        }
+        Err(_) => {
+            let error = "无法打开登录窗口，请重试。".to_owned();
+            flow.update(&attempt, Phase::Failed, Some(error.clone()));
+            Err(error)
+        }
+    }
 }
+
+fn watch_login_close(window: &tauri::WebviewWindow, flow: Arc<LoginFlow>, attempt: Attempt) {
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            flow.window_closed(&attempt);
+        }
+    });
+}
+
 #[tauri::command]
 async fn finish_provider_login(
     provider: String,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let (label, _, _) = provider_info(&provider)?;
-    let window = app
-        .get_webview_window(label)
-        .ok_or("登录窗口已关闭，请重新打开并完成登录。")?;
-    let read_window = window.clone();
-    let read_provider = provider.clone();
-    // WKWebView/WebView2 cookie APIs dispatch onto their UI thread themselves.
-    let raw = tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
-        let url = if read_provider == "xiaomi" {
-            "https://api2.mina.mi.com/"
-        } else {
-            "https://www.bilibili.com/"
-        };
-        let mut cookies = read_window
-            .cookies_for_url(url.parse().map_err(|_| "登录地址无效")?)
-            .map_err(|_| "无法读取登录会话，请重试。")?;
-        // The account cookie can be scoped to xiaomi.com while the service
-        // token is scoped to mina.mi.com. Never take a token from another service.
-        if read_provider == "xiaomi" && !cookies.iter().any(|c| c.name() == "userId") {
-            let account = read_window
-                .cookies_for_url(
-                    "https://account.xiaomi.com/"
-                        .parse()
-                        .map_err(|_| "登录地址无效")?,
-                )
-                .map_err(|_| "无法读取小米账号信息，请重新登录。")?;
-            cookies.extend(account.into_iter().filter(|c| c.name() == "userId"));
-        }
-        let names: &[&str] = if read_provider == "xiaomi" {
-            &["userId", "serviceToken"]
-        } else {
-            &["SESSDATA", "bili_jct", "buvid3", "buvid4", "DedeUserID"]
-        };
-        Ok(cookies
-            .into_iter()
-            .filter(|c| names.contains(&c.name()))
-            .map(|c| format!("{}={}", c.name(), c.value()))
-            .collect::<Vec<_>>()
-            .join("; "))
-    })
-    .await
-    .map_err(|_| "无法读取登录会话")??;
-    if provider == "xiaomi" {
-        state.engine.voice.connect(&raw).await?;
-    } else {
-        state.engine.downloads.set_session(&raw).await?;
+    let flow = state.login(&provider)?;
+    let _guard = flow.gate.lock().await;
+    if flow.status().phase == Phase::Connected {
+        return Ok(());
     }
-    let _ = window.close();
-    Ok(())
+    let attempt = flow.current().ok_or("请先打开登录窗口。")?;
+    if attempt.cancel.is_cancelled() {
+        return Err("登录窗口已关闭，请重新打开并完成登录。".into());
+    }
+    let result = complete_login(&app, &state.engine, &provider, &flow, &attempt).await;
+    match result {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("尚未取得完整登录会话，请先在官方窗口完成登录。".into()),
+        Err(error) => {
+            flow.update(&attempt, Phase::Failed, Some(error.clone()));
+            Err(error)
+        }
+    }
 }
 #[tauri::command]
 async fn connect_voice_session(
     cookie: String,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<crate::voice::VoiceState, String> {
-    state.engine.voice.connect(&cookie).await
+    let flow = state.login("xiaomi")?;
+    let _guard = flow.gate.lock().await;
+    let result = state.engine.voice.connect(&cookie).await?;
+    flow.reset();
+    if let Some(window) = app.get_webview_window("xiaomi-login") {
+        let _ = window.close();
+    }
+    Ok(result)
 }
 #[tauri::command]
 async fn disconnect_provider(
@@ -390,11 +659,10 @@ async fn disconnect_provider(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let (label, _, _) = provider_info(&provider)?;
-    if provider == "xiaomi" {
-        state.engine.voice.disable(true).await;
-    } else {
-        state.engine.downloads.disconnect().await;
-    }
+    let flow = state.login(&provider)?;
+    let _guard = flow.gate.lock().await;
+    flow.reset();
+    clear_provider(&state.engine, &provider).await;
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.close();
     }

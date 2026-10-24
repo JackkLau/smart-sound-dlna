@@ -7,14 +7,14 @@
   const $ = (id) => document.getElementById(id);
   const phases = { queued: '等待下载', resolving: '正在获取音轨', downloading: '正在下载', cancelling: '正在取消', importing: '正在加入曲库', completed: '已加入曲库', failed: '下载未完成', cancelled: '已取消' };
   let features = null;
-  let preview = null;
   let polling = false;
   let revision = 0;
   let deviceSignature = '';
   const jobs = new Map();
   const completed = new Set();
   const providerBusy = new Set();
-  const loginOpen = new Set();
+  const loginErrors = new Map();
+  const loginPhases = new Map();
   const busyForms = new Set();
 
   function errorAt(id, error, field) {
@@ -38,8 +38,8 @@
   }
   // Forms share pending behavior and preserve entered values on failure. The
   // native dialog can close whenever no foreground request is in progress.
-  async function featureAction(form, pendingLabel, operation, field) {
-    if (busyForms.has(form.id)) return;
+  async function featureAction(form, pendingLabel, operation, field, pendingButton) {
+    if (busyForms.has(form.id) || form.closest('dialog').dataset.busy === 'true') return;
     busyForms.add(form.id);
     revision += 1;
     errorAt(`${form.id}-error`, null, field);
@@ -48,7 +48,7 @@
     const controls = [...form.querySelectorAll('button,input,select')];
     const previous = controls.map((control) => control.disabled);
     controls.forEach((control) => { control.disabled = true; });
-    const submit = form.querySelector('[type="submit"]');
+    const submit = pendingButton || form.querySelector('[type="submit"]');
     const label = submit?.textContent;
     if (submit) { submit.textContent = pendingLabel; submit.setAttribute('aria-busy', 'true'); }
     try { return await operation(); }
@@ -74,35 +74,9 @@
     dialog.addEventListener('cancel', (event) => { if (dialog.dataset.busy === 'true') event.preventDefault(); });
     dialog.querySelector('[data-feature-close]').addEventListener('click', () => { if (dialog.dataset.busy !== 'true') dialog.close(); });
   });
-  $('open-bilibili').addEventListener('click', () => { $('bilibili-dialog').showModal(); $('bilibili-url').focus(); pollFeatures(); });
+  $('open-bilibili').addEventListener('click', () => { $('bilibili-dialog').showModal(); document.querySelector('input[name=import-source]:checked')?.focus(); pollFeatures(); });
   $('open-voice').addEventListener('click', () => { $('voice-dialog').showModal(); pollFeatures(); });
 
-  onSubmit('bilibili-form', async (form) => {
-    const url = $('bilibili-url').value.trim();
-    if (!url) { errorAt('bilibili-form-error', '请先粘贴视频链接或 BV 号。', 'bilibili-url'); return; }
-    // Invalidate the previous selection before any new parse, including errors.
-    preview = null;
-    $('download-form').hidden = true;
-    const result = await featureAction(form, '正在解析…', () => invoke('parse_bilibili', { url }), 'bilibili-url');
-    if (!result) return;
-    preview = result;
-    $('preview-title').textContent = preview.title;
-    $('preview-author').textContent = `${preview.author} · ${preview.parts.length} 个分 P · ${preview.bvid}`;
-    $('bilibili-part').replaceChildren(...preview.parts.map((part) => {
-      const option = element('option', '', `P${part.page} · ${part.title} · ${formatTime(part.duration)}`);
-      option.value = String(part.cid); option.selected = part.page === preview.selected_page;
-      return option;
-    }));
-    errorAt('download-form-error', null);
-    $('download-form').hidden = false;
-    $('bilibili-part').focus();
-  });
-  onSubmit('download-form', (form) => featureAction(form, '正在加入队列…', async () => {
-    if (!preview) throw new Error('请先解析视频链接。');
-    const job = await invoke('download_bilibili', { previewId: preview.id, cid: Number($('bilibili-part').value) });
-    announce(`已加入下载队列：${job.title}`);
-    return job;
-  }, 'bilibili-part'));
   onSubmit('voice-bind-form', (form) => featureAction(form, '正在连接…', async () => {
     if (!features?.selected_device_id) throw new Error('请先在主界面选择播放音响。');
     if (!$('voice-source').value) throw new Error('请选择接收语音的小爱音响。');
@@ -125,20 +99,18 @@
   }, 'voice-cookie'));
 
   async function accountAction(provider, action, button) {
-    if (providerBusy.has(provider)) return;
+    if (providerBusy.has(provider) || button.closest('dialog').dataset.busy === 'true') return;
     providerBusy.add(provider);
     revision += 1;
     const dialog = button.closest('dialog');
     dialog.dataset.busy = 'true';
     errorAt(`${provider}-login-error`, null);
+    loginErrors.delete(provider);
     button.setAttribute('aria-busy', 'true');
     renderAccounts();
     try {
       await invoke(action, { provider });
-      if (action === 'open_provider_login') loginOpen.add(provider);
-      else loginOpen.delete(provider);
-      if (action === 'finish_provider_login') announce(provider === 'xiaomi' ? '已连接小米账号' : 'Bilibili 登录成功');
-    } catch (error) { errorAt(`${provider}-login-error`, error); }
+    } catch (error) { loginErrors.set(provider, messageOf(error)); }
     finally {
       providerBusy.delete(provider);
       button.setAttribute('aria-busy', 'false');
@@ -152,12 +124,23 @@
   function renderAccounts() {
     for (const provider of ['xiaomi', 'bilibili']) {
       const connected = provider === 'xiaomi' ? features?.voice.connected : features?.downloads.authenticated;
+      const login = features?.[`${provider}_login`] || { phase: 'idle' };
+      const pending = ['waiting', 'checking', 'failed'].includes(login.phase);
+      const checking = login.phase === 'checking';
+      const previousPhase = loginPhases.get(provider);
+      if (previousPhase !== login.phase) {
+        loginErrors.delete(provider);
+        loginPhases.set(provider, login.phase);
+        if (login.phase === 'connected') announce(provider === 'xiaomi' ? '已连接小米账号，请选择接收语音的音响' : 'Bilibili 登录成功');
+      }
       const container = document.querySelector(`[data-provider="${provider}"]`);
-      container.querySelectorAll('button').forEach((button) => { button.disabled = providerBusy.has(provider); });
-      container.querySelector('[data-finish-login]').hidden = !loginOpen.has(provider);
-      container.querySelector('[data-disconnect]').hidden = !connected && !loginOpen.has(provider);
+      container.querySelectorAll('button').forEach((button) => { button.disabled = providerBusy.has(provider) || checking; });
+      container.querySelector('[data-finish-login]').hidden = !pending;
+      container.querySelector('[data-disconnect]').hidden = !connected && !pending;
+      container.querySelector('[data-finish-login]').textContent = checking ? '正在确认…' : '重试连接';
       container.querySelector('[data-login]').textContent = connected ? '重新登录' : provider === 'xiaomi' ? '登录小米账号' : '登录 Bilibili';
-      $(`${provider}-account-status`).textContent = loginOpen.has(provider) ? '在新窗口完成官方登录后，回到这里点击「完成登录」。' : connected ? '已连接 · 本次运行有效' : provider === 'xiaomi' ? '未连接 · 使用绑定音响的小米账号' : '未登录 · 公开视频可直接解析';
+      $(`${provider}-account-status`).textContent = checking ? '正在确认登录状态，请稍候…' : login.phase === 'waiting' ? '请在官方窗口完成登录，成功后窗口会自动关闭。' : connected ? '已连接 · 本次运行有效' : login.phase === 'cancelled' ? '登录已取消，可重新打开登录窗口。' : provider === 'xiaomi' ? '未连接 · 使用绑定音响的小米账号' : '未登录 · 公开视频可直接解析';
+      errorAt(`${provider}-login-error`, loginErrors.get(provider) || login.error);
     }
   }
   function render() {
@@ -232,6 +215,7 @@
       }
     }
   }
+  window.MusicFeatures = { featureAction, onSubmit, errorAt, pollFeatures };
   pollFeatures();
   setInterval(pollFeatures, 2000);
 })();
