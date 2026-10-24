@@ -1,3 +1,12 @@
+## 0.5.3 GitHub 三端原生构建（2026-10-24）
+
+- 应用源码已推送到 `JackkLau/smart-sound-dlna`。最终安装包对应提交 `e98b70f3b831d5a82c68a7f2e4c28bcca6be899c`，[GitHub Actions 第 6 次构建](https://github.com/JackkLau/smart-sound-dlna/actions/runs/40083734105)的 Windows x64、macOS Apple Silicon、macOS Intel 三个作业全部成功。
+- Windows 原生 MSVC 环境：79 项模块测试、8 项真实本机 HTTP/SOAP 集成测试和 14 项 UI 回归通过，共 101 项；两种 Mac 架构各通过 81 + 8 + 14 项，共 103 项。三个环境的 UI 语法、Rust 格式和全部目标 Clippy 检查均通过。UI 回归使用 Node 测试边界，不作为 Windows WebView 实机交互验收。
+- 构建暴露两处关闭推流端口的测试在 Windows 超时：模块测试和集成测试均使用 2 秒总期限。统一为 10 秒后继续要求真实 TCP 端口关闭，Windows 全套回归通过；没有跳过测试，也没有修改实际播放或连接超时。同步清理 Windows 条件编译分支的冗余 return。
+- CI 增加编译缓存与有长度上限的失败摘要，保留真实退出码。摘要脚本以短错误、长错误及成功/失败退出码进行隔离验证，避免管道或摘要裁剪掩盖失败。安装包上传仍要求实际文件存在，构建产物保留 30 天。
+- 已上传：[Windows x64 NSIS 安装包](https://github.com/JackkLau/smart-sound-dlna/actions/runs/40083734105/artifacts/12557025032)、[Apple Silicon DMG](https://github.com/JackkLau/smart-sound-dlna/actions/runs/40083734105/artifacts/12555489082)、[Intel Mac DMG](https://github.com/JackkLau/smart-sound-dlna/actions/runs/40083734105/artifacts/12557160145)。下载 Actions 产物需要登录 GitHub，ZIP 解压后运行对应安装包。
+- 本次未配置 Windows 发行签名或 Apple 公证。Windows 实际安装、WebView 登录和真实音响功能仍由用户在自己的 Windows 电脑验收；没有把 CI 的模拟服务测试当作实机音响或真实账号验证。
+
 ## 0.5.3 曲库移除与整行播放（2026-10-24）
 
 - 每行新增“移除”，确认后只删除曲库索引，保留本地音频文件；弹窗明确提示重新导入和手动曲名的处理方式。移除当前曲目时先停止音响，停止失败保留记录；索引保存失败恢复原记录及顺序。移除其他曲目不发送音响控制，也不打断当前播放。
