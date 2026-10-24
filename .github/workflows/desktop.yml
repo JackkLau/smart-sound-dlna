@@ -72,6 +72,8 @@ jobs:
           fi
           exit "$result"
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      - name: Remove cached installers before building
+        run: node -e "require('node:fs').rmSync('src-tauri/target/${{ matrix.target }}/release/bundle', { recursive: true, force: true })"
       - run: npm run build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
       - uses: actions/cache/save@v4
         if: always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true'

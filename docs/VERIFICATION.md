@@ -6,6 +6,7 @@
 - UI 语法、Rust 格式及全部目标 Clippy 通过；完整 Intel Mac 离线编译检查通过。严格 UI 静态契约 0 findings，DESIGN.md 官方 lint 0 errors、16 个既有 token 警告。账户共用渲染器增加“恢复中 / 缓存离线可重试 / 已验证 / 退出清除”状态，Node 回归覆盖两个平台账号。当前 Mac 锁屏，实际浏览器账户界面交互尚未补验，未将静态检查视为视觉验收。
 - Apple Silicon 0.6.0 应用及 DMG 构建成功，应用版本确认 0.6.0，hdiutil 镜像校验 VALID。没有重启用户应用或中断播放。
 - GitHub 工作流改为所有分支及标签每次推送均构建，默认分支推送在三个原生作业全部成功后发布完整 Release。发布边界测试覆盖缺失 / 错误安装包拒绝、SHA-256、平台文件对应、草稿上传后公开、新提交优先及来源不匹配拒绝；README 提供固定 Release 下载地址。实际云端结果以[构建记录](https://github.com/JackkLau/smart-sound-dlna/actions/workflows/desktop.yml)和[最新 Release](https://github.com/JackkLau/smart-sound-dlna/releases/latest)为准。
+- [第 7 次云端构建](https://github.com/JackkLau/smart-sound-dlna/actions/runs/40088334904)三个原生作业全部成功，包含 Windows 凭据管理器跨进程读写清除。发布阶段正确拒绝缓存里混入的旧版安装包（同一平台发现两个 EXE）；在打包前清理该平台 bundle 目录，保留编译缓存，再执行构建及上传，避免旧版包混入本次产物。
 - 0.5.x 首次升级仍需登录一次，以后有效会话可恢复；过期会话需重新登录。真实账号的更新恢复、Windows 实际安装、真实音响长时续播仍需实机验收；CI 使用本机服务模拟设备。安装包未签名或公证。
 
 ## 0.5.3 GitHub 三端原生构建（2026-10-24）
