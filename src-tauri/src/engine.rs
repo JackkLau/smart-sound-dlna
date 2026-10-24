@@ -165,15 +165,23 @@ impl Completion {
                 self.playing = None;
                 false
             }
-            "STOPPED" => {
-                let completed = self.playing.take().is_some_and(|(last, length, at)| {
+            "STOPPED" | "NO_MEDIA_PRESENT" => {
+                // Play is asynchronous on some speakers: its first poll can
+                // still be STOPPED. Only a prior PLAYING sample may disarm it.
+                let Some((last, length, at)) = self.playing.take() else {
+                    return false;
+                };
+                let completed = {
+                    let elapsed = now.duration_since(at);
                     let tolerance = now
                         .duration_since(at)
                         .as_secs()
                         .saturating_add(2)
                         .clamp(3, 10);
-                    length > 0 && last.saturating_add(tolerance) >= length
-                });
+                    elapsed <= Duration::from_secs(10)
+                        && length > 0
+                        && last.saturating_add(tolerance) >= length
+                };
                 self.armed = false;
                 completed
             }
@@ -786,7 +794,12 @@ impl Engine {
                 if status.volume.is_some() {
                     p.volume = status.volume;
                 }
-                if status.position_valid {
+                if status.position_valid
+                    || matches!(
+                        status.transport_state.as_str(),
+                        "STOPPED" | "NO_MEDIA_PRESENT"
+                    )
+                {
                     p.completion.observe(
                         &status.transport_state,
                         status.position,
@@ -944,5 +957,19 @@ mod tests {
         c = Completion::default();
         c.observe("PLAYING", 238, 240, now);
         assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn startup_stop_does_not_disarm_but_stale_end_evidence_cannot_advance() {
+        let now = Instant::now();
+        let mut c = Completion {
+            armed: true,
+            playing: None,
+        };
+        assert!(!c.observe("STOPPED", 0, 0, now));
+        assert!(c.armed);
+        c.observe("PLAYING", 179, 180, now);
+        assert!(!c.observe("NO_MEDIA_PRESENT", 0, 0, now + Duration::from_secs(30)));
+        assert!(!c.armed);
     }
 }

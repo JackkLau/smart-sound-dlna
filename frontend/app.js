@@ -324,7 +324,7 @@
     const paused = Boolean(current) && state.transport_state === 'PAUSED_PLAYBACK';
     const externalPlayback = !current && ['PLAYING', 'PAUSED_PLAYBACK'].includes(state.transport_state);
     const transitioning = state.transport_state === 'TRANSITIONING';
-    const transportLabels = { PLAYING: '正在播放', PAUSED_PLAYBACK: '已暂停', STOPPED: '已停止', TRANSITIONING: '正在准备播放…' };
+    const transportLabels = { PLAYING: '正在播放', PAUSED_PLAYBACK: '已暂停', STOPPED: '已停止', NO_MEDIA_PRESENT: '已停止', TRANSITIONING: '正在准备播放…' };
     $('now-title').textContent = current ? current.title || current.filename
       : externalPlayback ? state.transport_state === 'PLAYING' ? '音响正在播放其他内容' : '音响已暂停其他内容' : '还没有播放音乐';
     $('now-subtitle').textContent = state.selected_device_id && speakerReason ? speakerReason : current

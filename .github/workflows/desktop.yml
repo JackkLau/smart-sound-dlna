@@ -3,11 +3,14 @@ name: Desktop builds
 on:
   workflow_dispatch:
   push:
-    branches: [main, master]
   pull_request:
 
 permissions:
   contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   desktop:
@@ -43,7 +46,9 @@ jobs:
             ~/.cargo/git
             src-tauri/target
           key: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ github.sha }}
-          restore-keys: rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock') }}-
+          restore-keys: |
+            rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock') }}-
+            rust-${{ runner.os }}-${{ runner.arch }}-
       - run: npm ci
       - run: npm run check:ui
       - run: npm run test:ui
@@ -54,7 +59,7 @@ jobs:
           CARGO_TERM_COLOR: never
         run: |
           set +e
-          cargo test --manifest-path src-tauri/Cargo.toml --locked 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
+          (cargo test --manifest-path src-tauri/Cargo.toml --locked && cargo test --manifest-path src-tauri/Cargo.toml --locked --lib native_process_round_trip -- --ignored) 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
           result=${PIPESTATUS[0]}
           set -e
           if [ "$result" -ne 0 ]; then
@@ -85,3 +90,27 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
+
+  publish:
+    needs: desktop
+    if: github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: xiaomi-music-*
+          path: release-artifacts
+      - name: Validate and stage installers
+        run: node scripts/prepare-release.mjs release-artifacts release-out
+      - name: Publish complete release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: node scripts/publish-release.mjs release-out

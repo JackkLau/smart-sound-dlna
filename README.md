@@ -2,6 +2,18 @@
 
 Windows / macOS 桌面客户端，将电脑里的本地音乐通过 DLNA 投送到小米 / 小爱音箱。原生 Rust 负责设备发现、音乐库、HTTP 音频推流和播放控制，Tauri 2 提供桌面窗口与系统文件选择器。安装后的应用无需 Python、Node.js 或单独启动服务。
 
+## 下载安装包
+
+以下固定入口指向最近一次完整通过三端测试和打包的版本，无需登录 GitHub：
+
+| 系统 | 下载 |
+| --- | --- |
+| Windows 10 / 11 x64 | [下载 EXE 安装程序](https://github.com/JackkLau/smart-sound-dlna/releases/latest/download/xiaomi-music-windows-x64-setup.exe) |
+| macOS Apple Silicon | [下载 DMG](https://github.com/JackkLau/smart-sound-dlna/releases/latest/download/xiaomi-music-macos-apple-silicon.dmg) |
+| macOS Intel | [下载 DMG](https://github.com/JackkLau/smart-sound-dlna/releases/latest/download/xiaomi-music-macos-intel.dmg) |
+
+[版本说明与历史安装包](https://github.com/JackkLau/smart-sound-dlna/releases/latest) · [SHA-256 校验值](https://github.com/JackkLau/smart-sound-dlna/releases/latest/download/SHA256SUMS) · [构建记录](https://github.com/JackkLau/smart-sound-dlna/actions/workflows/desktop.yml)。安装包暂未签名或公证。
+
 ## 使用
 
 1. 让电脑和音箱连接同一局域网，在小爱音箱 App 中开启 **我的 → DLNA 音乐播放**。小米官方列出的支持型号包含**小爱音箱 Pro**；具体入口随 App 版本可能变化。[小米官方说明](https://ics-resources.xiaomi.com/ics-resources/articles/6066c6ebe4801400d6db9c70.html)
@@ -9,6 +21,8 @@ Windows / macOS 桌面客户端，将电脑里的本地音乐通过 DLNA 投送�
 3. 选择音箱，再用「添加音乐」或「导入文件夹」打开系统选择窗口。点击歌曲即可播放。
 
 支持暂停、继续、停止、上一首 / 下一首、进度、音量、顺序播放、单曲循环、列表循环。播放期间电脑必须保持唤醒且应用保持运行；退出应用会关闭推流服务。
+
+**顺序播放**按完整曲库列表的顺序续播，到最后一首结束；列表循环会回到第一首，单曲循环重播当前歌曲。音响刚开始播放时短暂报告停止、或结束时清空进度，不会再让整条队列失去续播能力。自动切歌仍要求最近确认播放已接近结尾，手动停止、暂停、断连或其他控制器接管不会凭旧进度触发下一首。
 
 ### 小爱音箱 Pro 自动发现
 
@@ -49,9 +63,15 @@ Windows / macOS 桌面客户端，将电脑里的本地音乐通过 DLNA 投送�
 
 下方“测试指令”会通过同一指令处理层实际控制当前音响，不需要先登录账号，适合检查歌名匹配与 DLNA 控制。精确歌名优先；部分歌名只能匹配到一首时才会播放，多个匹配会提示补充歌名。切换主界面音响后，需更新语音绑定。
 
-小爱并没有通用的 DLNA 语音点歌接口。本功能通过 **小米云端对话记录轮询**桥接到本地曲库，约每 3 秒读取一次，只执行启用后的新“本地”指令。语音识别仍由小爱完成，电脑不录音。普通聊天不执行、不保存；会话、语音绑定和最近一次指令结果仅保留在内存，重启需重新连接。该非官方接口可能随账号、固件或服务更新失效；连续读取失败后停止接收并显示原因，不保证与小爱原有语音回答完全无冲突。
+小爱并没有通用的 DLNA 语音点歌接口。本功能通过 **小米云端对话记录轮询**桥接到本地曲库，约每 3 秒读取一次，只执行启用后的新“本地”指令。语音识别仍由小爱完成，电脑不录音。普通聊天不执行、不保存；语音绑定和最近一次指令结果仅保留在内存，重启后仍需选择音响并明确开启接收。登录会话会自动恢复，但不会自动开始读取对话。该非官方接口可能随账号、固件或服务更新失效；连续读取失败后停止接收并显示原因，不保证与小爱原有语音回答完全无冲突。
 
-如果官方网页登录不能取得会话，可展开高级接入，输入自己 `micoapi` 服务的 `userId=…; serviceToken=…` Cookie。不要使用米家其他服务的令牌。Cookie 不写入音乐库、日志或前端存储；不要向他人提供。官方登录窗口使用临时浏览会话且不能访问本地音乐 IPC。连接后可随时“停止接收”或“断开账号”。
+如果官方网页登录不能取得会话，可展开高级接入，输入自己 `micoapi` 服务的 `userId=…; serviceToken=…` Cookie。不要使用米家其他服务的令牌。验证成功后同样使用系统凭据库保存；Cookie 不写入音乐库、日志或前端存储，不要向他人提供。官方登录窗口使用临时浏览会话且不能访问本地音乐 IPC。连接后可随时“停止接收”或“退出登录”。
+
+### 重启与更新后保持登录
+
+小米和 Bilibili 的有效服务会话分别保存在 **macOS 钥匙串 / Windows 凭据管理器**，使用稳定的应用标识，与安装目录、应用版本和曲库文件分开。重启或更新后自动读取并向服务端验证，通过后才显示已连接；网络暂不可用时保留缓存，可点击“重试连接”。会话过期时需要重新登录，不能绕过平台验证。
+
+点击对应账号的 **退出登录** 会清除该账号的系统缓存；清除失败会显示错误，不会误报退出成功。不会保存小米密码、验证码或账号 `passToken`，也不会读取其他浏览器的登录数据。0.5.x 没有保存会话，因此首次升级到 0.6.0 后需要登录一次，之后有效会话即可恢复。系统凭据库锁定或要求授权时，请按系统提示处理。
 
 ## 从 Bilibili 建立本地曲库
 
@@ -68,7 +88,7 @@ Windows / macOS 桌面客户端，将电脑里的本地音乐通过 DLNA 投送�
 
 原生 Rust 解析视频信息，选择独立 AAC 音轨，保存为 **M4A**，不会下载视频画面或重新编码，不需要 Python、yt-dlp 或 FFmpeg。每批最多 100 首、最多排队 100 项，一次下载一项，单文件上限 1 GB。完成后校验 MP4 容器、原子保存，再把标题与来源写入曲库；未完成文件不会加入曲库，同一分 P 已入库时不会重复下载。任务列表保留本次运行最近 200 项，退出应用中断未完成任务；已完成音乐重启保留。
 
-下载位置显示在弹窗“账号与保存位置”中，默认为应用数据目录的 `downloads/`。这里只支持普通投稿视频中可访问的独立 AAC 音轨，暂不支持直播、番剧或无独立音轨的视频。公开视频支持未登录解析和下载：客户端自动建立站点签发的匿名访客会话，并使用当前的 WBI 签名接口读取视频与音轨。匿名标识只留在本次运行的内存中，不会显示为“已登录”。需要登录权限的内容，可在官方页面登录 Bilibili，应用会自动确认会话并关闭登录窗口；连接失败时可点击“重试连接”。登录只对本次运行有效。访问受限、风控、付费或区域限制会报告错误，不绕过权限。请仅保存你有权下载的内容。M4A 是否能在具体音响固件播放仍需实机确认，本版本不提供 MP3 转码。
+下载位置显示在弹窗“账号与保存位置”中，默认为应用数据目录的 `downloads/`。这里只支持普通投稿视频中可访问的独立 AAC 音轨，暂不支持直播、番剧或无独立音轨的视频。公开视频支持未登录解析和下载：客户端自动建立站点签发的匿名访客会话，并使用当前的 WBI 签名接口读取视频与音轨。匿名标识只留在本次运行的内存中，不会显示为“已登录”。需要登录权限的内容，可在官方页面登录 Bilibili，应用会自动确认会话并关闭登录窗口；连接失败时可点击“重试连接”。有效登录会话由系统凭据库保存，重启后验证并恢复，退出登录会清除。访问受限、风控、付费或区域限制会报告错误，不绕过权限。请仅保存你有权下载的内容。M4A 是否能在具体音响固件播放仍需实机确认，本版本不提供 MP3 转码。
 
 接口参考：[MiService 的小米账号与服务签名交换](https://github.com/Yonsm/MiService/blob/master/miservice/miaccount.py)、[XiaoMusic 对话适配实现](https://github.com/hanxi/xiaomusic/blob/main/xiaomusic/conversation.py)、[MiService 的 MiNA 设备接口](https://github.com/Yonsm/MiService/blob/master/miservice/minaservice.py)、[yt-dlp 的 Bilibili 解析器](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/bilibili.py)。这些仅用于核对接口，不是运行依赖。
 
@@ -109,7 +129,9 @@ npm run build -- --bundles app,dmg
 
 若 macOS 的 DMG 装饰阶段被 Finder / 已打开的镜像占用，先退出临时镜像里的应用并推出该镜像，再执行 `CI=true npm run tauri -- bundle --bundles dmg`。这是 Tauri 自带的无界面打包模式，跳过 Finder 窗口装饰。
 
-`.github/workflows/desktop.yml` 提供 Windows x64、macOS Intel、macOS Apple Silicon 的测试和打包矩阵。推送到 `master` / `main` 或手动运行 **Desktop builds** 后，在仓库 **Actions → 对应构建记录 → Artifacts** 下载，产物保留 30 天；下载 Actions 产物需要登录 GitHub。
+`.github/workflows/desktop.yml` 在每次代码推送（所有分支及标签）、Pull Request 或手动运行时，自动执行 Windows x64、macOS Intel、macOS Apple Silicon 的原生测试和打包。默认分支 `master` 的推送构建中，三端作业全部成功后，会校验 EXE / DMG 格式、统一文件名、生成 SHA-256 并自动发布 GitHub Release；上述固定下载入口随完整发布更新。任意平台失败不会发布半成品，也不会替换上一套可用安装包。同一分支的新推送会取消仍在运行的旧构建。
+
+分支、标签和 PR 的测试包仍可在 **Actions → 对应构建记录 → Artifacts** 下载，保留 30 天，需登录 GitHub；正式发布到 Releases 的安装包无需登录即可下载。
 
 | 构建产物 | 系统 | 安装包 |
 | --- | --- | --- |

@@ -1,5 +1,6 @@
 //! XiaoAI cloud conversation adapter and a provider-independent command layer.
-//! Session cookies stay in memory; only the explicitly bound speaker is read.
+//! Runtime cookies stay in memory; desktop persists validated sessions in the OS
+//! credential store. Only the explicitly bound speaker is read.
 use crate::{engine::Engine, library::Track, online};
 use serde::Serialize;
 use serde_json::Value;

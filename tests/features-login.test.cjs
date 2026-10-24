@@ -44,9 +44,9 @@ function harness() {
   vm.runInNewContext(readFileSync('frontend/features.js', 'utf8'), context);
   return {
     node, announcements,
-    async update(phase, connected = false, error) {
+    async update(phase, connected = false, error, cached = false, provider = 'xiaomi') {
       await new Promise(setImmediate);
-      data = { ...data, voice: { ...data.voice, connected }, xiaomi_login: { phase, error } };
+      data = { ...data, [provider === 'xiaomi' ? 'voice' : 'downloads']: { ...data[provider === 'xiaomi' ? 'voice' : 'downloads'], [provider === 'xiaomi' ? 'connected' : 'authenticated']: connected }, [`${provider}_login`]: { phase, error, cached } };
       await tick();
     },
   };
@@ -67,6 +67,23 @@ test('automatic login replaces waiting UI, hides retry and announces success onc
   assert.equal(ui.node('voice-badge').textContent, '已连接');
   await ui.update('connected', true);
   assert.equal(ui.announcements.length, 1);
+});
+
+test('both cached accounts distinguish restoration, offline retry and verified login', async () => {
+  for (const provider of ['xiaomi', 'bilibili']) {
+    const ui = harness();
+    await ui.update('checking', false, undefined, true, provider);
+    assert.match(ui.node(`${provider}-account-status`).textContent, /正在恢复/);
+    assert.equal(ui.node(`${provider}-login`).disabled, true);
+    await ui.update('failed', false, '网络暂不可用', true, provider);
+    assert.match(ui.node(`${provider}-account-status`).textContent, /暂未连接/);
+    assert.equal(ui.node(`${provider}-finish-login`).hidden, false);
+    assert.equal(ui.node(`${provider}-disconnect`).hidden, false);
+    await ui.update('connected', true, undefined, true, provider);
+    assert.match(ui.node(`${provider}-account-status`).textContent, /重启后自动恢复/);
+    await ui.update('idle', false, undefined, false, provider);
+    assert.equal(ui.node(`${provider}-disconnect`).hidden, true);
+  }
 });
 
 test('cancelled window clears waiting status and retry controls', async () => {

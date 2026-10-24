@@ -2,6 +2,7 @@ use crate::{
     engine::{Engine, Snapshot},
     library::{self, ImportSummary},
     login::{self, Attempt, LoginFlow, LoginStatus, Phase},
+    session_cache::SessionCache,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -21,6 +22,7 @@ struct AppState {
     picker_busy: Arc<AtomicBool>,
     xiaomi_login: Arc<LoginFlow>,
     bilibili_login: Arc<LoginFlow>,
+    sessions: Arc<SessionCache>,
 }
 
 impl AppState {
@@ -222,11 +224,28 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 running.start();
             });
+            let xiaomi_login = Arc::new(LoginFlow::default());
+            let bilibili_login = Arc::new(LoginFlow::default());
+            let sessions = Arc::new(SessionCache::default());
+            for (provider, flow) in [
+                ("xiaomi", xiaomi_login.clone()),
+                ("bilibili", bilibili_login.clone()),
+            ] {
+                let attempt = flow.begin();
+                flow.update(&attempt, Phase::Checking, None);
+                let engine = engine.clone();
+                let sessions = sessions.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _guard = flow.gate.lock().await;
+                    let _ = restore_provider(&engine, &flow, &attempt, &sessions, provider).await;
+                });
+            }
             app.manage(AppState {
                 engine,
                 picker_busy: Arc::new(AtomicBool::new(false)),
-                xiaomi_login: Arc::default(),
-                bilibili_login: Arc::default(),
+                xiaomi_login,
+                bilibili_login,
+                sessions,
             });
             Ok(())
         })
@@ -423,6 +442,34 @@ async fn clear_provider(engine: &Engine, provider: &str) {
     }
 }
 
+async fn restore_provider(
+    engine: &Engine,
+    flow: &LoginFlow,
+    attempt: &Attempt,
+    sessions: &SessionCache,
+    provider: &str,
+) -> Result<bool, String> {
+    let restored = flow
+        .restore_cached(attempt, sessions, provider, |raw| async move {
+            if provider == "xiaomi" {
+                engine.voice.connect(&raw).await.map(|_| ())
+            } else {
+                engine.downloads.set_session(&raw).await
+            }
+        })
+        .await?;
+    match restored {
+        Some(login::Completion::Connected) => Ok(true),
+        Some(login::Completion::Cancelled {
+            clear_session: true,
+        }) => {
+            clear_provider(engine, provider).await;
+            Ok(false)
+        }
+        _ => Ok(false),
+    }
+}
+
 // Caller holds the provider gate. Automatic and manual completion use the same
 // path; only a server-validated session may close the login window.
 async fn complete_login(
@@ -431,6 +478,7 @@ async fn complete_login(
     provider: &str,
     flow: &LoginFlow,
     attempt: &Attempt,
+    sessions: &SessionCache,
 ) -> Result<bool, String> {
     if attempt.cancel.is_cancelled() {
         return Ok(false);
@@ -448,21 +496,28 @@ async fn complete_login(
     let Some(credential) = read? else {
         return Ok(false);
     };
-    let validation = async {
-        let raw = match credential {
+    flow.update(attempt, Phase::Checking, None);
+    let raw = tokio::select! {
+        _ = attempt.cancel.cancelled() => return Ok(false),
+        raw = async { Ok::<String, String>(match credential {
             LoginCredential::Service(cookie) => cookie,
             LoginCredential::XiaomiAccount(account) => {
                 crate::xiaomi_login::exchange(&account).await?
             }
-        };
+        }) } => raw?,
+    };
+    let mut validated = false;
+    let validation = async {
         if provider == "xiaomi" {
-            engine.voice.connect(&raw).await.map(|_| ())
+            engine.voice.connect(&raw).await?;
         } else {
-            engine.downloads.set_session(&raw).await
+            engine.downloads.set_session(&raw).await?;
         }
+        validated = true;
+        Ok(())
     };
     let result = flow
-        .complete(attempt, validation, || {
+        .complete_cached(attempt, sessions, provider, &raw, validation, || {
             let closed = window
                 .close()
                 .map_err(|_| "账号已连接，请手动关闭登录窗口。".to_owned());
@@ -471,7 +526,11 @@ async fn complete_login(
             }
             closed
         })
-        .await?;
+        .await;
+    if result.is_err() && validated {
+        clear_provider(engine, provider).await;
+    }
+    let result = result?;
     match result {
         login::Completion::Connected => Ok(true),
         login::Completion::Cancelled { clear_session } => {
@@ -489,6 +548,7 @@ fn monitor_login(
     provider: String,
     flow: Arc<LoginFlow>,
     attempt: Attempt,
+    sessions: Arc<SessionCache>,
 ) {
     tauri::async_runtime::spawn(async move {
         let started = tokio::time::Instant::now();
@@ -508,7 +568,7 @@ fn monitor_login(
             let result = if tokio::time::Instant::now() >= deadline {
                 Err("登录等待超时，请重新打开登录窗口后重试。".into())
             } else {
-                match complete_login(&app, &engine, &provider, &flow, &attempt).await {
+                match complete_login(&app, &engine, &provider, &flow, &attempt, &sessions).await {
                     Ok(false) => attempt
                         .page
                         .load_error(started.elapsed())
@@ -560,7 +620,14 @@ async fn open_provider_login(
             flow.update(&attempt, Phase::Failed, Some(error.clone()));
             return Err(error);
         }
-        monitor_login(app, state.engine.clone(), provider, flow.clone(), attempt);
+        monitor_login(
+            app,
+            state.engine.clone(),
+            provider,
+            flow.clone(),
+            attempt,
+            state.sessions.clone(),
+        );
         return Ok(());
     }
     let attempt = flow.begin();
@@ -593,7 +660,14 @@ async fn open_provider_login(
     match result {
         Ok(window) => {
             watch_login_close(&window, flow.clone(), attempt.clone());
-            monitor_login(app, state.engine.clone(), provider, flow.clone(), attempt);
+            monitor_login(
+                app,
+                state.engine.clone(),
+                provider,
+                flow.clone(),
+                attempt,
+                state.sessions.clone(),
+            );
             Ok(())
         }
         Err(_) => {
@@ -623,11 +697,30 @@ async fn finish_provider_login(
     if flow.status().phase == Phase::Connected {
         return Ok(());
     }
+    let (label, _, _) = provider_info(&provider)?;
+    if app.get_webview_window(label).is_none() {
+        let attempt = flow.begin();
+        return if restore_provider(&state.engine, &flow, &attempt, &state.sessions, &provider)
+            .await?
+        {
+            Ok(())
+        } else {
+            Err("没有可恢复的登录状态，请打开登录窗口。".into())
+        };
+    }
     let attempt = flow.current().ok_or("请先打开登录窗口。")?;
     if attempt.cancel.is_cancelled() {
         return Err("登录窗口已关闭，请重新打开并完成登录。".into());
     }
-    let result = complete_login(&app, &state.engine, &provider, &flow, &attempt).await;
+    let result = complete_login(
+        &app,
+        &state.engine,
+        &provider,
+        &flow,
+        &attempt,
+        &state.sessions,
+    )
+    .await;
     match result {
         Ok(true) => Ok(()),
         Ok(false) => Err("尚未取得完整登录会话，请先在官方窗口完成登录。".into()),
@@ -646,6 +739,11 @@ async fn connect_voice_session(
     let flow = state.login("xiaomi")?;
     let _guard = flow.gate.lock().await;
     let result = state.engine.voice.connect(&cookie).await?;
+    if let Err(error) = state.sessions.save("xiaomi", &cookie).await {
+        state.engine.voice.disable(true).await;
+        return Err(error);
+    }
+    flow.set_cached(true);
     flow.reset();
     if let Some(window) = app.get_webview_window("xiaomi-login") {
         let _ = window.close();
@@ -661,6 +759,9 @@ async fn disconnect_provider(
     let (label, _, _) = provider_info(&provider)?;
     let flow = state.login(&provider)?;
     let _guard = flow.gate.lock().await;
+    // If deletion fails, do not claim logout succeeded or restore it silently.
+    state.sessions.clear(&provider).await?;
+    flow.set_cached(false);
     flow.reset();
     clear_provider(&state.engine, &provider).await;
     if let Some(window) = app.get_webview_window(label) {

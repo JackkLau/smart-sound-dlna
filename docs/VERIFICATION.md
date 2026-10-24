@@ -1,3 +1,13 @@
+## 0.6.0 顺序播放、登录缓存与自动发布（2026-10-24）
+
+- 在真实本机 HTTP/SOAP 音响测试边界复现旧队列缺陷：播放命令成功后的首次 STOPPED 会提前解除续播，曲尾进度请求失败也会漏切。新增回归先在旧实现失败，修复后 STOPPED / NO_MEDIA_PRESENT 两条链路均能按完整曲库切到下一首；保留手动停止、暂停、外部接管、断连和过期进度不误切的保护。
+- 新增独立 SessionCache，使用 macOS 钥匙串 / Windows 凭据管理器，服务标识固定且不含版本号。仅保存服务所需 Cookie，不保存密码、验证码或小米 passToken；启动时向原服务验证，失败保留重试数据，退出登录须成功删除缓存。登录验证、缓存写入失败和关闭窗口的迟到写入均有回归。
+- 本机完整测试：87 项 Rust 模块测试、8 项 HTTP/SOAP 集成测试、17 项 Node UI/发布边界测试通过。默认忽略的系统凭据测试另行显式执行：真实 macOS 钥匙串在独立进程依次写入、读取、删除、确认不存在，包含 1600 字节模拟 Bilibili 会话；没有读取或修改真实账号。Windows 与两种 Mac CI 均要求运行同一原生凭据测试。
+- UI 语法、Rust 格式及全部目标 Clippy 通过；完整 Intel Mac 离线编译检查通过。严格 UI 静态契约 0 findings，DESIGN.md 官方 lint 0 errors、16 个既有 token 警告。账户共用渲染器增加“恢复中 / 缓存离线可重试 / 已验证 / 退出清除”状态，Node 回归覆盖两个平台账号。当前 Mac 锁屏，实际浏览器账户界面交互尚未补验，未将静态检查视为视觉验收。
+- Apple Silicon 0.6.0 应用及 DMG 构建成功，应用版本确认 0.6.0，hdiutil 镜像校验 VALID。没有重启用户应用或中断播放。
+- GitHub 工作流改为所有分支及标签每次推送均构建，默认分支推送在三个原生作业全部成功后发布完整 Release。发布边界测试覆盖缺失 / 错误安装包拒绝、SHA-256、平台文件对应、草稿上传后公开、新提交优先及来源不匹配拒绝；README 提供固定 Release 下载地址。实际云端结果以[构建记录](https://github.com/JackkLau/smart-sound-dlna/actions/workflows/desktop.yml)和[最新 Release](https://github.com/JackkLau/smart-sound-dlna/releases/latest)为准。
+- 0.5.x 首次升级仍需登录一次，以后有效会话可恢复；过期会话需重新登录。真实账号的更新恢复、Windows 实际安装、真实音响长时续播仍需实机验收；CI 使用本机服务模拟设备。安装包未签名或公证。
+
 ## 0.5.3 GitHub 三端原生构建（2026-10-24）
 
 - 应用源码已推送到 `JackkLau/smart-sound-dlna`。最终安装包对应提交 `e98b70f3b831d5a82c68a7f2e4c28bcca6be899c`，[GitHub Actions 第 6 次构建](https://github.com/JackkLau/smart-sound-dlna/actions/runs/40083734105)的 Windows x64、macOS Apple Silicon、macOS Intel 三个作业全部成功。

@@ -135,11 +135,11 @@
       }
       const container = document.querySelector(`[data-provider="${provider}"]`);
       container.querySelectorAll('button').forEach((button) => { button.disabled = providerBusy.has(provider) || checking; });
-      container.querySelector('[data-finish-login]').hidden = !pending;
-      container.querySelector('[data-disconnect]').hidden = !connected && !pending;
+      container.querySelector('[data-finish-login]').hidden = !pending && !(login.cached && !connected);
+      container.querySelector('[data-disconnect]').hidden = !connected && !pending && !login.cached;
       container.querySelector('[data-finish-login]').textContent = checking ? '正在确认…' : '重试连接';
-      container.querySelector('[data-login]').textContent = connected ? '重新登录' : provider === 'xiaomi' ? '登录小米账号' : '登录 Bilibili';
-      $(`${provider}-account-status`).textContent = checking ? '正在确认登录状态，请稍候…' : login.phase === 'waiting' ? '请在官方窗口完成登录，成功后窗口会自动关闭。' : connected ? '已连接 · 本次运行有效' : login.phase === 'cancelled' ? '登录已取消，可重新打开登录窗口。' : provider === 'xiaomi' ? '未连接 · 使用绑定音响的小米账号' : '未登录 · 公开视频可直接解析';
+      container.querySelector('[data-login]').textContent = connected || login.cached ? '重新登录' : provider === 'xiaomi' ? '登录小米账号' : '登录 Bilibili';
+      $(`${provider}-account-status`).textContent = checking ? login.cached ? '正在恢复已保存的登录，请稍候…' : '正在确认登录状态，请稍候…' : login.phase === 'waiting' ? '请在官方窗口完成登录，成功后窗口会自动关闭。' : connected ? login.cached ? '已连接 · 重启后自动恢复登录' : '已连接 · 登录状态尚未保存' : login.cached ? '登录状态已保存 · 暂未连接，可重试或重新登录' : login.phase === 'cancelled' ? '登录已取消，可重新打开登录窗口。' : provider === 'xiaomi' ? '未连接 · 使用绑定音响的小米账号' : '未登录 · 公开视频可直接解析';
       errorAt(`${provider}-login-error`, loginErrors.get(provider) || login.error);
     }
   }

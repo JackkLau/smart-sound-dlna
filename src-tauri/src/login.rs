@@ -1,5 +1,6 @@
 //! Ephemeral provider login state. No credentials are included in UI snapshots.
 use crate::login_webview::LoginPage;
+use crate::session_cache::SessionCache;
 use serde::Serialize;
 use std::{
     future::Future,
@@ -12,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 pub struct LoginStatus {
     pub phase: Phase,
     pub error: Option<String>,
+    pub cached: bool,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug, Serialize)]
@@ -87,6 +89,7 @@ impl LoginFlow {
         inner.status = LoginStatus {
             phase: Phase::Waiting,
             error: None,
+            cached: inner.status.cached,
         };
         attempt
     }
@@ -100,7 +103,8 @@ impl LoginFlow {
         if inner.id != attempt.id || attempt.cancel.is_cancelled() {
             return false;
         }
-        inner.status = LoginStatus { phase, error };
+        inner.status.phase = phase;
+        inner.status.error = error;
         true
     }
 
@@ -119,7 +123,76 @@ impl LoginFlow {
             attempt.cancel.cancel();
         }
         inner.id += 1;
-        inner.status = LoginStatus::default();
+        inner.status = LoginStatus {
+            cached: inner.status.cached,
+            ..Default::default()
+        };
+    }
+
+    pub fn set_cached(&self, cached: bool) {
+        self.inner.lock().unwrap().status.cached = cached;
+    }
+
+    /// Caller holds the provider gate. Cache reads alone never mean signed in.
+    pub async fn restore_cached<F, Fut>(
+        &self,
+        attempt: &Attempt,
+        cache: &SessionCache,
+        provider: &str,
+        validate: F,
+    ) -> Result<Option<Completion>, String>
+    where
+        F: FnOnce(String) -> Fut,
+        Fut: Future<Output = Result<(), String>>,
+    {
+        if !self.update(attempt, Phase::Checking, None) {
+            return Ok(Some(Completion::Cancelled {
+                clear_session: false,
+            }));
+        }
+        let raw = match cache.read(provider).await {
+            Ok(Some(raw)) => raw,
+            Ok(None) => {
+                self.set_cached(false);
+                self.reset();
+                return Ok(None);
+            }
+            Err(error) => {
+                self.update(attempt, Phase::Failed, Some(error.clone()));
+                return Err(error);
+            }
+        };
+        self.set_cached(true);
+        self.complete(attempt, validate(raw), || Ok(()))
+            .await
+            .map(Some)
+    }
+
+    pub async fn complete_cached(
+        &self,
+        attempt: &Attempt,
+        cache: &SessionCache,
+        provider: &str,
+        raw: &str,
+        validate: impl Future<Output = Result<(), String>>,
+        close_window: impl FnOnce() -> Result<(), String>,
+    ) -> Result<Completion, String> {
+        let mut saved = false;
+        let validation = async {
+            validate.await?;
+            if !attempt.cancel.is_cancelled() {
+                cache.save(provider, raw).await?;
+                saved = true;
+                self.set_cached(true);
+            }
+            Ok(())
+        };
+        let result = self.complete(attempt, validation, close_window).await;
+        if saved && matches!(result, Ok(Completion::Cancelled { .. })) {
+            cache.clear(provider).await?;
+            self.set_cached(false);
+        }
+        result
     }
 
     // Called with gate held, after all required cookies have arrived. Keeping
@@ -243,6 +316,150 @@ pub fn session_cookie(provider: &str, cookies: &[Cookie<'_>]) -> Option<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_cache::{tests::MemoryStore, CredentialStore, SessionCache};
+
+    #[tokio::test]
+    async fn cached_login_is_verified_after_restart_and_failed_verification_keeps_retry_data() {
+        let store = Arc::new(MemoryStore::default());
+        let cache = SessionCache::with_store(store.clone());
+        let flow = LoginFlow::default();
+        let attempt = flow.begin();
+        assert!(matches!(
+            flow.complete_cached(
+                &attempt,
+                &cache,
+                "bilibili",
+                "SESSDATA=fixture",
+                async { Ok(()) },
+                || Ok(())
+            )
+            .await
+            .unwrap(),
+            Completion::Connected
+        ));
+        assert!(flow.status().cached);
+        let restarted = LoginFlow::default();
+        let attempt = restarted.begin();
+        let result = restarted
+            .restore_cached(
+                &attempt,
+                &SessionCache::with_store(store),
+                "bilibili",
+                |raw| async move {
+                    assert_eq!(raw, "SESSDATA=fixture");
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result, Some(Completion::Connected)));
+        let attempt = restarted.begin();
+        assert!(restarted
+            .restore_cached(&attempt, &cache, "bilibili", |_| async {
+                Err("网络暂不可用".into())
+            })
+            .await
+            .is_err());
+        assert_eq!(restarted.status().phase, Phase::Failed);
+        assert!(restarted.status().cached);
+        assert!(cache.read("bilibili").await.unwrap().is_some());
+        let stale = restarted.begin();
+        restarted.reset();
+        assert!(matches!(
+            restarted
+                .restore_cached(&stale, &cache, "bilibili", |_| async {
+                    panic!("stale restore must never connect")
+                })
+                .await
+                .unwrap(),
+            Some(Completion::Cancelled {
+                clear_session: false
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn failed_validation_and_failed_storage_cannot_claim_a_persisted_login() {
+        let store = Arc::new(MemoryStore::default());
+        let cache = SessionCache::with_store(store.clone());
+        let flow = LoginFlow::default();
+        let attempt = flow.begin();
+        assert!(flow
+            .complete_cached(
+                &attempt,
+                &cache,
+                "xiaomi",
+                "userId=fixture; serviceToken=fixture",
+                async { Err("会话已失效".into()) },
+                || panic!("must not close")
+            )
+            .await
+            .is_err());
+        assert!(cache.read("xiaomi").await.unwrap().is_none());
+        store.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+        let attempt = flow.begin();
+        assert!(flow
+            .complete_cached(
+                &attempt,
+                &cache,
+                "xiaomi",
+                "userId=fixture; serviceToken=fixture",
+                async { Ok(()) },
+                || panic!("must not close")
+            )
+            .await
+            .is_err());
+        assert!(!flow.status().cached);
+        assert_eq!(flow.status().phase, Phase::Failed);
+    }
+
+    #[tokio::test]
+    async fn closing_during_cache_write_removes_the_late_session() {
+        struct ClosingStore {
+            memory: MemoryStore,
+            flow: Arc<LoginFlow>,
+            attempt: Attempt,
+        }
+        impl CredentialStore for ClosingStore {
+            fn read(&self, p: &str) -> Result<Option<String>, String> {
+                self.memory.read(p)
+            }
+            fn write(&self, p: &str, secret: &str) -> Result<(), String> {
+                self.memory.write(p, secret)?;
+                self.flow.window_closed(&self.attempt);
+                Ok(())
+            }
+            fn delete(&self, p: &str) -> Result<(), String> {
+                self.memory.delete(p)
+            }
+        }
+        let flow = Arc::new(LoginFlow::default());
+        let attempt = flow.begin();
+        let cache = SessionCache::with_store(Arc::new(ClosingStore {
+            memory: MemoryStore::default(),
+            flow: flow.clone(),
+            attempt: attempt.clone(),
+        }));
+        let result = flow
+            .complete_cached(
+                &attempt,
+                &cache,
+                "bilibili",
+                "SESSDATA=fixture",
+                async { Ok(()) },
+                || panic!("cancelled login must not close again"),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            Completion::Cancelled {
+                clear_session: true
+            }
+        ));
+        assert!(cache.read("bilibili").await.unwrap().is_none());
+        assert!(!flow.status().cached);
+    }
     fn cookie(name: &'static str, domain: &'static str, value: &'static str) -> Cookie<'static> {
         Cookie::build((name, value))
             .domain(domain)

@@ -57,7 +57,8 @@ pub struct TransportStatus {
     pub position: u64,
     pub duration: u64,
     /// Both time values came from a valid GetPositionInfo response. Consumers
-    /// must clear completion tracking on false, even if transport is STOPPED.
+    /// must not record a new progress sample on false. A terminal state may
+    /// still be evaluated against fresh, previously confirmed end progress.
     pub position_valid: bool,
     pub volume: Option<u8>,
     pub current_uri: Option<String>,
@@ -1038,9 +1039,7 @@ impl Controller {
                 status.duration = duration.unwrap_or(0);
                 status.position_valid = position.is_some() && duration.is_some();
                 if !status.position_valid {
-                    status
-                        .warnings
-                        .push("音响未提供有效的播放时间，本次状态不用于自动切歌。".into());
+                    status.warnings.push("音响暂未提供有效的播放时间。".into());
                 }
                 status.current_uri = values
                     .get("TrackURI")

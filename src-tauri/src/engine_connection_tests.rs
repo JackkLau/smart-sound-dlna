@@ -15,6 +15,7 @@ struct Renderer {
     uri: String,
     transport: String,
     position: u64,
+    position_unavailable: bool,
 }
 struct Wire {
     state: Mutex<Renderer>,
@@ -61,12 +62,16 @@ impl Fixture {
                 wire.position_started.notify_one();
                 wire.release_position.cancelled().await;
             }
+            if action == "GetPositionInfo" && wire.state.lock().unwrap().position_unavailable {
+                return (axum::http::StatusCode::INTERNAL_SERVER_ERROR, String::new());
+            }
             let output = {
                 let mut state = wire.state.lock().unwrap();
                 match action {
                     "SetAVTransportURI" => {
                         let doc = roxmltree::Document::parse(&body).unwrap();
                         state.uri = doc.descendants().find(|n| n.has_tag_name("CurrentURI")).unwrap().text().unwrap().into();
+                        state.position = 0;
                         String::new()
                     }
                     "Play" => { state.transport = "PLAYING".into(); String::new() }
@@ -111,6 +116,62 @@ impl Fixture {
             server,
             track,
         }
+    }
+}
+
+#[tokio::test]
+async fn automatic_queue_survives_a_startup_stop_and_terminal_position_loss() {
+    for terminal in ["STOPPED", "NO_MEDIA_PRESENT"] {
+        let fixture = Fixture::new().await;
+        let second_file = fixture._directory.path().join("second.mp3");
+        std::fs::write(&second_file, b"second audio").unwrap();
+        fixture.engine.import(vec![second_file]).await.unwrap();
+        let tracks = fixture.engine.snapshot().await.unwrap().tracks;
+        let second = tracks[1].id.clone();
+        fixture.engine.play(&fixture.track).await.unwrap();
+        // The speaker has accepted Play, but its first status still says STOPPED.
+        fixture.wire.state.lock().unwrap().transport = "STOPPED".into();
+        fixture.engine.poll().await;
+        {
+            let mut state = fixture.wire.state.lock().unwrap();
+            state.transport = "PLAYING".into();
+            state.position = 179;
+        }
+        fixture.engine.poll().await;
+        {
+            let mut state = fixture.wire.state.lock().unwrap();
+            state.transport = terminal.into();
+            state.position_unavailable = true;
+        }
+        fixture.engine.poll().await;
+        assert_eq!(
+            fixture
+                .engine
+                .snapshot()
+                .await
+                .unwrap()
+                .current_track_id
+                .as_deref(),
+            Some(second.as_str()),
+            "{terminal} must advance in library order"
+        );
+        fixture.wire.state.lock().unwrap().position_unavailable = false;
+        fixture.engine.poll().await;
+        fixture.wire.state.lock().unwrap().transport = "STOPPED".into();
+        fixture.engine.poll().await;
+        assert_eq!(
+            fixture
+                .wire
+                .state
+                .lock()
+                .unwrap()
+                .actions
+                .iter()
+                .filter(|a| *a == "Play")
+                .count(),
+            2,
+            "an early stop on the next song must not skip it"
+        );
     }
 }
 
