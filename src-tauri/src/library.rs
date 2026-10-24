@@ -488,9 +488,9 @@ fn is_link(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        return metadata.file_attributes()
+        metadata.file_attributes()
             & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-            != 0;
+            != 0
     }
     #[cfg(not(windows))]
     {

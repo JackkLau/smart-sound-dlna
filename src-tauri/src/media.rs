@@ -432,7 +432,10 @@ mod tests {
         std::fs::write(&fixture.source, b"private replacement").unwrap();
         assert_eq!(fixture.request("GET", &fixture.path(), "").await.0, 404);
         fixture.shutdown.cancel();
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        // Windows can take several seconds to report a refused loopback
+        // connection. Keep checking the real socket, with room for that OS
+        // delay; a listener that stays open must still fail the test.
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {
                 if tokio::net::TcpStream::connect((
                     std::net::Ipv4Addr::LOCALHOST,

@@ -39,7 +39,23 @@ jobs:
       - run: npm run check:ui
       - run: npm run test:ui
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Rust tests
+        shell: bash
+        env:
+          CARGO_TERM_COLOR: never
+        run: |
+          set +e
+          cargo test --manifest-path src-tauri/Cargo.toml --locked 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
+          result=${PIPESTATUS[0]}
+          set -e
+          if [ "$result" -ne 0 ]; then
+            details="$(tail -n 90 "$RUNNER_TEMP/cargo-test.log")"
+            details="${details//'%'/'%25'}"
+            details="${details//$'\r'/'%0D'}"
+            details="${details//$'\n'/'%0A'}"
+            echo "::error title=Rust tests failed::$details"
+          fi
+          exit "$result"
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
       - run: npm run build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
       - uses: actions/upload-artifact@v4
