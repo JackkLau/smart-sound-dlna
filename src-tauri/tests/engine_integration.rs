@@ -509,7 +509,9 @@ async fn replaced_sources_invalid_controls_and_shutdown_are_handled() {
     assert!(fixture.renderer.lock().unwrap().actions.is_empty());
     let port = fixture.engine.snapshot().await.unwrap().media_port;
     fixture.engine.shutdown();
-    tokio::time::timeout(Duration::from_secs(2), async {
+    // Match the media regression's allowance for Windows to report a refused
+    // loopback connection, while still requiring the actual listener to close.
+    tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             if tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
                 .await
