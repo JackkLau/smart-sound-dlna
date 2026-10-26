@@ -183,7 +183,7 @@
       store.accept(result);
       const accepted = result.items.filter((item) => item.job).length;
       const skipped = result.items.filter((item) => !item.job);
-      $('batch-summary').textContent = `已加入队列 ${accepted} 首${skipped.length ? `，跳过 ${skipped.length} 首（仍保留选择）` : ''}。下载进度显示在主界面的音乐库上方。`;
+      $('batch-summary').textContent = `已加入队列 ${accepted} 首${skipped.length ? `，跳过 ${skipped.length} 首（仍保留选择）` : ''}。下载进度显示在页面下方的导入区。`;
       $('batch-results').replaceChildren(...skipped.map((item) => element('li', '', `${item.title}：${item.error}`)));
       announce(`已加入下载队列 ${accepted} 首${skipped.length ? `，跳过 ${skipped.length} 首` : ''}`);
     });

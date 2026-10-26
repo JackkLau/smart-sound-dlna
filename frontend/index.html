@@ -12,6 +12,8 @@
   <script src="./library-actions.js" defer></script>
   <script src="./import-selection.js" defer></script>
   <script src="./imports.js" defer></script>
+  <script src="./vendor/qrcode.js" defer></script>
+  <script src="./mobile.js" defer></script>
 </head>
 <body>
   <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -53,19 +55,21 @@
       <div class="connection-route"><span class="route-computer">本机音乐</span><span class="route-line"></span><span>无线音响</span></div>
     </aside>
     <section class="library-panel" aria-labelledby="library-title">
-      <div class="library-heading"><div><span class="eyebrow">你的私人曲库</span><h2 id="library-title" tabindex="-1">音乐库<span id="track-count" class="count">0</span></h2><p>收藏在电脑里的好声音，即选即播。</p></div><div class="import-actions"><button disabled class="button outline" id="open-folder"><svg class="icon"><use href="#i-folder"/></svg><span>导入文件夹</span></button><button disabled class="button dark" id="add-music"><svg class="icon"><use href="#i-plus"/></svg><span>添加音乐</span></button></div></div>
+      <div class="library-heading"><div><span class="eyebrow">你的私人曲库</span><h2 id="library-title" tabindex="-1">音乐库<span id="track-count" class="count">0</span></h2><p>收藏在电脑里的好声音，即选即播。</p></div></div>
       <div class="notice" id="connection-error" role="status" hidden><svg class="icon"><use href="#i-info"/></svg><p id="connection-error-text"></p><button disabled class="text-button" id="retry-connection">重新检查</button></div>
       <div class="notice warning" id="playback-error" role="status" hidden><svg class="icon"><use href="#i-info"/></svg><p id="playback-error-text"></p></div>
-      <div class="source-toolbar"><div><strong>把喜欢的声音，留在曲库</strong><span>导入视频音轨后，也能语音点播</span></div><button disabled class="button outline" id="open-bilibili">从 Bilibili 导入</button></div>
-      <section class="download-panel" id="download-panel" aria-labelledby="download-title" hidden><div class="section-heading"><h3 id="download-title">音频下载</h3><span class="field-help">完成后自动加入曲库</span></div><p id="download-error" class="field-error" role="alert"></p><ul id="download-jobs" class="download-jobs"></ul></section>
       <div class="library-toolbar"><div class="search-field"><svg class="icon"><use href="#i-search"/></svg><label class="sr-only" for="search">搜索音乐</label><input id="search" type="search" placeholder="搜索歌曲或文件名" autocomplete="off"><button disabled id="clear-search" class="icon-button" aria-label="清空搜索" title="清空搜索" hidden><svg class="icon small"><use href="#i-close"/></svg></button></div><span class="library-caption" id="library-caption">本地音乐 · 直接推流</span></div>
-      <div class="import-status" id="import-status" role="status" hidden><svg class="icon"><use href="#i-folder"/></svg><div><strong id="import-status-title"></strong><p id="import-status-copy"></p></div></div>
       <div class="track-surface">
         <div class="track-header" aria-hidden="true"><span>歌曲</span><span>格式</span><span>大小</span><span></span></div>
         <ul class="track-list" id="tracks" aria-label="音乐列表"></ul>
         <div class="empty-state" id="empty-state"><div class="empty-record" aria-hidden="true"><svg class="icon"><use href="#i-music"/></svg></div><h3 id="empty-title">这里，留给你的好音乐</h3><p id="empty-copy">添加本地音乐，或导入整个文件夹。<br>连接音响后，就能把音乐送到耳边。</p><button disabled class="button outline" id="empty-add"><svg class="icon"><use href="#i-plus"/></svg><span>添加第一首音乐</span></button><p class="format-hint" id="formats">正在读取支持的音乐格式…</p></div>
       </div>
       <div class="library-footer"><span id="list-status" role="status">正在读取音乐库…</span><nav class="pagination" aria-label="音乐列表分页"><button class="icon-button" id="page-previous" aria-label="上一页" title="上一页" disabled><svg class="icon flip"><use href="#i-arrow"/></svg></button><span id="page-info">1 / 1</span><button class="icon-button" id="page-next" aria-label="下一页" title="下一页" disabled><svg class="icon"><use href="#i-arrow"/></svg></button></nav></div>
+      <section class="import-panel" aria-labelledby="import-title">
+        <div class="source-toolbar"><div><h3 id="import-title">导入音乐</h3><span>添加本地文件，或将视频音轨保存到曲库。</span></div><div class="import-actions"><button disabled class="button outline" id="open-folder"><svg class="icon"><use href="#i-folder"/></svg><span>导入文件夹</span></button><button disabled class="button dark" id="add-music"><svg class="icon"><use href="#i-plus"/></svg><span>添加音乐</span></button><button disabled class="button outline" id="open-mobile">手机发送</button><button disabled class="button outline" id="open-bilibili">从 Bilibili 导入</button></div></div>
+        <div class="import-status" id="import-status" role="status" hidden><svg class="icon"><use href="#i-folder"/></svg><div><strong id="import-status-title"></strong><p id="import-status-copy"></p></div></div>
+        <section class="download-panel" id="download-panel" aria-labelledby="download-title" hidden><div class="section-heading"><h3 id="download-title">音频下载</h3><span class="field-help">完成后自动加入曲库</span></div><p id="download-error" class="field-error" role="alert"></p><ul id="download-jobs" class="download-jobs"></ul></section>
+      </section>
       <p class="local-note"><span class="status-dot"></span>音乐直接从电脑传送，不上传云端。播放时请保持客户端运行。</p>
     </section>
   </main>
@@ -109,6 +113,17 @@
       </form>
     </div>
   </dialog>
+  <dialog id="mobile-dialog" class="feature-dialog" aria-labelledby="mobile-title" aria-describedby="mobile-description">
+    <div class="dialog-heading"><div><span class="eyebrow">手机选歌 · 电脑保存</span><h2 id="mobile-title">从手机发送音乐</h2></div><button disabled type="button" class="icon-button" data-feature-close aria-label="关闭手机发送设置"><svg class="icon"><use href="#i-close"/></svg></button></div>
+    <form id="mobile-form" class="dialog-body" novalidate>
+      <p id="mobile-description" class="dialog-description">手机与电脑连接同一 Wi-Fi。在手机浏览器粘贴 Bilibili 分享链接，选择音轨后由电脑下载，无需安装安卓应用。</p>
+      <div id="mobile-details" hidden><div id="mobile-network-field" hidden><label class="field-label" for="mobile-network">电脑网络（选择与手机同一网段的 IP）</label><select id="mobile-network" class="text-input"></select></div><p id="mobile-status" class="field-help" role="status"></p><div id="mobile-qr-frame" class="mobile-qr-frame" hidden><img id="mobile-qr" width="264" height="264" alt="用手机扫码打开音乐发送页面" aria-describedby="mobile-status"></div><p class="field-help">首次打开后，收藏此页或通过浏览器菜单“添加到主屏幕”。下次直接点开，不必再次扫码。请使用同一个浏览器，避免在聊天应用的内置浏览器中配对。</p></div>
+      <p class="field-help">电脑 IP 不变时入口保持不变。暂停接收或重启应用会保留配对；重启后需在电脑重新开启接收。暂停接收不影响已进入队列的下载。</p>
+      <p class="field-help">只在可信的家庭网络开启。手机仅能发送视频和查看本次下载，不会获得账号登录信息。“忘记手机并重新配对”会让原手机失去访问权限。</p>
+      <p class="field-help">手机打不开页面时，请检查两端 Wi-Fi、路由器访客隔离，以及电脑防火墙是否允许此应用接收局域网连接。</p>
+      <p id="mobile-form-error" class="field-error" role="alert"></p><div class="dialog-actions"><button disabled type="button" class="button outline" id="mobile-forget">忘记手机并重新配对</button><button disabled type="submit" class="button primary" id="mobile-toggle">开启手机接收</button></div>
+    </form>
+  </dialog>
   <dialog id="bilibili-dialog" class="feature-dialog" aria-labelledby="bilibili-title" aria-describedby="bilibili-description">
     <div class="dialog-heading"><div><span class="eyebrow">扩充你的曲库</span><h2 id="bilibili-title">从 Bilibili 导入音频</h2></div><button disabled type="button" class="icon-button" data-feature-close aria-label="关闭 Bilibili 导入"><svg class="icon"><use href="#i-close"/></svg></button></div>
     <div class="dialog-body">
@@ -151,7 +166,7 @@
         </form>
       </div>
       <details class="feature-details"><summary>账号与保存位置</summary><p class="field-help">公开视频可直接解析。需要登录的视频可在官方页面登录；登录状态由系统安全保存，重启后自动验证并恢复，退出登录会清除。</p><div class="login-actions" data-provider="bilibili"><button disabled type="button" class="button outline" data-login="bilibili">登录 Bilibili</button><button disabled type="button" class="button outline" data-finish-login="bilibili" hidden>重试连接</button><button disabled type="button" class="text-button" data-disconnect="bilibili" hidden>退出登录</button></div><p id="bilibili-account-status" class="field-help" role="status">未登录</p><p id="bilibili-login-error" class="field-error" role="alert"></p><p class="field-label">保存位置</p><p id="download-directory" class="field-help path-copy"></p></details>
-      <p class="field-help dialog-footnote">可以关闭此窗口继续听歌。下载进度显示在音乐库上方；退出客户端会中断未完成的任务。</p>
+      <p class="field-help dialog-footnote">可以关闭此窗口继续听歌。下载进度显示在页面下方的导入区；退出客户端会中断未完成的任务。</p>
     </div>
   </dialog>
   <dialog id="voice-dialog" class="feature-dialog" aria-labelledby="voice-title" aria-describedby="voice-description">

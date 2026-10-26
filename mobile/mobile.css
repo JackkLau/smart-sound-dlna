@@ -1,0 +1,18 @@
+.mobile-page { max-width: 640px; margin: 0 auto; padding: 24px 16px max(24px, env(safe-area-inset-bottom)); }
+.mobile-heading { padding-bottom: 16px; }
+.mobile-heading h1 { margin: 6px 0; font: 700 28px/1.3 var(--font-display); }
+.mobile-heading p { color: var(--color-muted); margin: 8px 0 0; }
+.mobile-page section { background: var(--color-surface); border: 1px solid var(--color-line); border-radius: var(--radius-panel); padding: 18px; margin-bottom: 16px; }
+.mobile-page h2 { font-size: 18px; margin: 0 0 8px; }
+.mobile-page h3 { font-size: 16px; overflow-wrap: anywhere; }
+.mobile-page form + form { border-top: 1px solid var(--color-line); margin-top: 20px; padding-top: 8px; }
+.mobile-page .text-input { font-size: 16px; width: 100%; resize: none; }
+.mobile-page .button { min-height: 44px; margin-top: 12px; width: 100%; }
+.mobile-section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.mobile-page #parts { padding: 0; border: 0; margin: 16px 0 0; min-width: 0; }
+.mobile-part { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; padding: 10px 0; border-bottom: 1px solid var(--color-line); overflow-wrap: anywhere; }
+.mobile-part input { flex-shrink: 0; width: 20px; height: 20px; margin: 2px 0; accent-color: var(--color-primary); }
+.mobile-jobs { margin: 0; padding: 0; list-style: none; }
+.mobile-jobs li { padding: 12px 0; border-bottom: 1px solid var(--color-line); overflow-wrap: anywhere; }
+.mobile-jobs p { margin: 4px 0 0; }
+.mobile-note { padding: 0 4px; }

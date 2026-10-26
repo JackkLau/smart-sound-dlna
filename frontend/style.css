@@ -232,9 +232,12 @@ dialog::backdrop { background: #24272d55; backdrop-filter: blur(3px); }
 @media (prefers-reduced-motion: reduce) { .import-status.is-pending > .icon { animation: none; } }
 
 /* Extension dialogs reuse the existing form and native dialog owners. */
-.source-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0 12px; border-bottom: 1px solid var(--color-line); margin-bottom: 8px; }
-.source-toolbar strong { display: block; font-size: 13px; font-weight: 550; }
+.import-panel { margin-top: 4px; border-top: 1px solid var(--color-line); padding-top: 12px; }
+.source-toolbar { display: flex; flex-direction: column; align-items: stretch; gap: 12px; margin-bottom: 12px; }
+.source-toolbar h3 { font-size: 14px; font-weight: 550; }
 .source-toolbar span { display: block; font-size: 12px; color: var(--color-muted); margin-top: 3px; }
+.import-panel .import-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.import-panel .import-actions span { color: inherit; margin: 0; font-size: inherit; }
 .voice-open { width: 100%; margin-top: 12px; justify-content: space-between; }
 .voice-open span { font-size: 11px; color: var(--color-muted); font-weight: 400; }
 .feature-dialog { width: min(620px, calc(100vw - 32px)); max-width: 620px; }
@@ -267,8 +270,8 @@ dialog::backdrop { background: #24272d55; backdrop-filter: blur(3px); }
 .download-job p.job-error { color: var(--color-danger); }
 .download-job progress { display: block; width: 100%; height: 5px; margin-top: 8px; accent-color: var(--color-primary); }
 .download-job .text-button { min-width: 48px; min-height: 32px; }
-@media (max-width: 760px) { .source-toolbar { align-items: start; } .source-toolbar span { max-width: 180px; } }
-@media (max-width: 480px) { .source-toolbar, .inline-field { flex-direction: column; align-items: stretch; } .source-toolbar span { max-width: none; } .inline-field .button { align-self: end; } }
+@media (max-width: 1150px) { .import-panel .import-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .inline-field { flex-direction: column; align-items: stretch; } .inline-field .button { align-self: end; } }
 
 @media (max-width: 620px) { .voice-open { grid-column: 1 / -1; } }
 
@@ -316,3 +319,5 @@ dialog::backdrop { background: #24272d55; backdrop-filter: blur(3px); }
 .track-remove:hover:not(:disabled) { color: var(--color-danger); }
 .button.danger { color: var(--color-surface); background: var(--color-danger); }
 .button.danger:hover:not(:disabled) { background: var(--color-ink); }
+.mobile-qr-frame { width: fit-content; max-width: 100%; margin: 12px auto; border: 1px solid var(--color-line); border-radius: var(--radius-control); background: #fff; padding: 8px; }
+.mobile-qr-frame img { display: block; width: 264px; max-width: 100%; height: auto; image-rendering: pixelated; }

@@ -19,6 +19,7 @@ use tauri_plugin_dialog::DialogExt;
 
 struct AppState {
     engine: Arc<Engine>,
+    mobile: crate::mobile::Receiver,
     picker_busy: Arc<AtomicBool>,
     xiaomi_login: Arc<LoginFlow>,
     bilibili_login: Arc<LoginFlow>,
@@ -198,6 +199,9 @@ pub fn run() {
         pick_music_files,
         pick_music_folder,
         get_features,
+        get_mobile_receiver,
+        set_mobile_receiver,
+        forget_mobile_pairing,
         parse_bilibili,
         download_bilibili,
         list_bilibili_folders,
@@ -217,6 +221,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
+            let mobile = crate::mobile::Receiver::new(data_dir.clone());
             let engine = tauri::async_runtime::block_on(Engine::new(data_dir))
                 .map_err(std::io::Error::other)?;
             let running = engine.clone();
@@ -242,6 +247,7 @@ pub fn run() {
             }
             app.manage(AppState {
                 engine,
+                mobile,
                 picker_busy: Arc::new(AtomicBool::new(false)),
                 xiaomi_login,
                 bilibili_login,
@@ -269,6 +275,33 @@ pub fn run() {
             }
         }
     });
+}
+
+#[tauri::command]
+async fn get_mobile_receiver(
+    state: State<'_, AppState>,
+) -> Result<crate::mobile::ReceiverStatus, String> {
+    Ok(state.mobile.status().await)
+}
+
+#[tauri::command]
+async fn set_mobile_receiver(
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<crate::mobile::ReceiverStatus, String> {
+    if enabled {
+        state.mobile.enable(&state.engine).await
+    } else {
+        Ok(state.mobile.disable().await)
+    }
+}
+
+#[tauri::command]
+async fn forget_mobile_pairing(
+    state: State<'_, AppState>,
+) -> Result<crate::mobile::ReceiverStatus, String> {
+    state.mobile.forget().await?;
+    state.mobile.enable(&state.engine).await
 }
 
 #[derive(Serialize)]

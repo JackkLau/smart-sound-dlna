@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>发送音乐到电脑</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/mobile.css"><script src="/app.js" defer></script></head>
+<body class="mobile-page">
+  <header class="mobile-heading"><span class="eyebrow">小米音响 · 本地音乐</span><h1>发送音乐到电脑</h1><p>在 Bilibili 复制视频分享链接，在这里粘贴。电脑负责解析、下载并加入曲库。</p></header>
+  <main>
+    <section id="pair-panel" aria-labelledby="pair-title">
+      <h2 id="pair-title">连接电脑</h2><p id="pair-status" class="field-help" role="status">正在连接电脑…</p>
+      <button disabled id="connection-retry" class="button outline" type="button">重试连接</button>
+    </section>
+    <section id="send-panel" hidden aria-labelledby="send-title">
+      <div class="mobile-section-heading"><h2 id="send-title">选择视频音轨</h2><span class="field-help">已连接电脑</span></div>
+      <p id="remember-note" class="field-help">收藏此页，或在浏览器菜单选择“添加到主屏幕”。下次直接打开，无需再次扫码；请保持同一 Wi-Fi，并在电脑开启手机接收。</p>
+      <form id="parse-form" novalidate><label class="field-label" for="share-text">视频链接或分享文案</label><textarea class="text-input resize-none" id="share-text" rows="3" maxlength="8192" required placeholder="粘贴 Bilibili 分享内容，支持 b23.tv、BV 号和分 P 链接" aria-describedby="parse-error"></textarea><button class="button primary" type="submit">发送并解析</button><p id="parse-error" class="field-error" role="alert"></p></form>
+      <form id="download-form" hidden novalidate><h3 id="video-title"></h3><p id="video-author" class="field-help"></p><p class="field-help">选择要保存的音轨，每次最多 100 首。多 P 视频默认选中链接指定的那一 P。</p><fieldset id="parts"><legend class="field-label">下载哪些音轨</legend></fieldset><p id="selected-count" class="field-help" role="status"></p><button class="button primary" type="submit">在电脑下载选中音轨</button><p id="download-error" class="field-error" role="alert"></p><p id="download-summary" role="status"></p></form>
+    </section>
+    <section id="jobs-panel" hidden aria-labelledby="jobs-title"><h2 id="jobs-title">电脑下载进度</h2><p class="field-help">关闭手机页面后，电脑会继续下载。取消或重试请在电脑操作。</p><ul id="jobs" class="mobile-jobs"></ul></section>
+    <p id="connection-error" class="field-error" role="alert"></p>
+    <p class="field-help mobile-note">仅下载你有权保存的内容。请保持电脑应用运行；需要账号权限的视频，请在电脑登录 Bilibili。此入口使用本地 HTTP，请仅在可信的家庭 Wi-Fi 使用。</p>
+  </main>
+  <noscript>请在浏览器启用 JavaScript 后重试。</noscript>
+</body></html>

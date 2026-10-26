@@ -3,6 +3,8 @@ pub mod dlna;
 pub mod engine;
 pub mod library;
 pub mod media;
+pub mod mobile;
+mod mobile_pairing;
 mod online;
 mod track_names;
 pub mod voice;

@@ -83,6 +83,15 @@ pub struct Downloader {
 }
 
 impl Downloader {
+    #[cfg(test)]
+    pub(crate) fn use_test_origin(&mut self, origin: Url) {
+        self.client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        self.test_origin = Some(origin);
+    }
     pub fn new(data_dir: &Path) -> Result<Arc<Self>, String> {
         Ok(Arc::new(Self {
             directory: data_dir.join("downloads"),
@@ -654,6 +663,42 @@ impl Downloader {
 fn active_phase(phase: &str) -> bool {
     !["completed", "failed", "cancelled"].contains(&phase)
 }
+/// Accept copied Android share text, without treating an embedded foreign URL
+/// as a BV identifier. Ambiguous multi-video messages require an explicit choice.
+pub fn shared_video_input(text: &str) -> Result<String, String> {
+    if text.len() > 8192 {
+        return Err("分享内容过长，请只粘贴一个视频链接。".into());
+    }
+    fn canonical(raw: &str) -> Option<String> {
+        match parse_input(raw).ok()? {
+            Input::Video { key, value, page } => Some(format!(
+                "https://www.bilibili.com/video/{}{value}/?p={page}",
+                if key == "aid" { "av" } else { "" }
+            )),
+            Input::Short(mut url) => {
+                url.set_fragment(None);
+                Some(url.into())
+            }
+        }
+    }
+    let mut candidates = Vec::new();
+    for word in
+        text.split(|c: char| c.is_whitespace() || "【】「」《》<>\"，。；（）()".contains(c))
+    {
+        let word = word.trim_matches(|c| matches!(c, ',' | '.' | ';' | '!' | '！'));
+        if let Some(url) = canonical(word) {
+            if !candidates.contains(&url) {
+                candidates.push(url);
+            }
+        }
+    }
+    match candidates.len() {
+        1 => Ok(candidates.remove(0)),
+        0 => Err("未找到 Bilibili 视频链接，请复制视频的分享链接或 BV 号。".into()),
+        _ => Err("分享内容包含多个视频，请一次发送一个链接。".into()),
+    }
+}
+
 #[derive(Debug, PartialEq)]
 enum Input {
     Video {

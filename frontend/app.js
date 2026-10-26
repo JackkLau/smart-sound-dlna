@@ -359,7 +359,7 @@
     $('mode').disabled = !available || mutationBusy || importPending;
     if (document.activeElement !== $('mode')) $('mode').value = state.queue_mode || 'sequential';
     $('discover').disabled = !available || mutationBusy || importPending || state.discovering || discoveryPending;
-    ['open-folder', 'open-device', 'add-music', 'open-bilibili', 'open-voice'].forEach((id) => { $(id).disabled = !available || mutationBusy || importPending; });
+    ['open-folder', 'open-device', 'add-music', 'open-bilibili', 'open-voice', 'open-mobile'].forEach((id) => { $(id).disabled = !available || mutationBusy || importPending; });
     document.querySelectorAll('.device-option').forEach((button) => { button.disabled = !available || mutationBusy || importPending; });
     $('empty-add').disabled = !query && (!available || mutationBusy || importPending);
     renderDiscovery();

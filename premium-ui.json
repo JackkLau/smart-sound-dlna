@@ -1,6 +1,6 @@
 {
   "profile": "product-admin",
-  "sourceRoots": ["frontend"],
+  "sourceRoots": ["frontend", "mobile"],
   "locale": "zh-CN",
   "canonicalMap": "DESIGN.md",
   "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"],

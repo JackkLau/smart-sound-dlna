@@ -92,6 +92,38 @@ Windows / macOS 桌面客户端，将电脑里的本地音乐通过 DLNA 投送�
 
 接口参考：[MiService 的小米账号与服务签名交换](https://github.com/Yonsm/MiService/blob/master/miservice/miaccount.py)、[XiaoMusic 对话适配实现](https://github.com/hanxi/xiaomusic/blob/main/xiaomusic/conversation.py)、[MiService 的 MiNA 设备接口](https://github.com/Yonsm/MiService/blob/master/miservice/minaservice.py)、[yt-dlp 的 Bilibili 解析器](https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/bilibili.py)。这些仅用于核对接口，不是运行依赖。
 
+## 从安卓手机发送音乐（同一 Wi-Fi）
+
+此功能从 0.7.1 起提供；上方固定下载入口会在三端构建全部成功后更新。
+
+此功能先提供**免安装手机网页**：Bilibili 中选择视频 → 分享 → 复制链接 → 手机浏览器粘贴 → 电脑解析并下载。整段分享文案、`b23.tv` 短链接、BV 号和带 `p` 的分 P 链接均可发送。一次发送一个视频，多 P 可勾选多个音轨。
+
+1. 在电脑应用点击 **手机发送 → 开启手机接收**。
+2. 用手机相机扫描电脑显示的**二维码**，在常用浏览器（如 Chrome）打开，自动配对，**无需输入地址或连接码**。电脑有多个网卡时，在下拉框选择与手机同一网段的 IP。
+3. 配对成功后收藏页面，或在浏览器菜单选择**添加到主屏幕**。下次直接打开即可；请使用同一个浏览器的普通模式，避免聊天应用内置浏览器。
+4. 在 Bilibili 视频分享菜单复制链接，返回手机页面粘贴，点击 **发送并解析**。
+5. 确认视频标题，勾选需要的音轨，点击 **在电脑下载选中音轨**。单 P 默认选中唯一音轨，多 P 默认选中链接指定的 P；每批最多 100 首。
+6. 手机显示本次提交任务的下载进度，电脑主界面同步显示下载队列，完成后自动加入电脑曲库。关闭手机页面不影响电脑下载；取消与失败重试在电脑操作。
+
+手机无需登录小米或 Bilibili；解析和下载使用电脑当前的 Bilibili 会话，公开视频继续支持匿名下载。应用重启后接收默认关闭，需在电脑再次开启，但手机配对会保留。**暂停手机接收**停止访问并保留配对，已接受的下载继续；**忘记手机并重新配对**撤销旧手机凭据并生成新二维码。换手机、清除浏览器数据或二维码过期时使用后者。
+
+入口固定使用 **TCP 8998**，电脑 IP 不变时，收藏和桌面快捷方式地址跨重启保持一致。端口被占用会明确报错，不会悄悄换地址。配对二维码本地生成，包含十分钟有效的一次性随机凭据，成功后不能重复配对；手机在首次加载时移除地址片段，再通过同源请求兑换长期令牌。手机浏览器在 localStorage 保存令牌，电脑数据目录仅保存其 SHA-256 摘要，更新安装包不会更换保存位置。接收服务不随应用启动自动开启。
+
+这是仅供可信家庭局域网使用的 HTTP 入口，不用于公网、公共 Wi-Fi 或端口转发。它只暴露解析、选中音轨下载及本次任务状态，不暴露登录态、电脑文件路径、完整曲库或播放控制；与音响的媒体服务使用不同端口及凭据。页面打不开时检查同一 Wi-Fi、访客网络隔离、VPN 和电脑防火墙的私人网络权限。
+
+### 是否需要安卓应用
+
+| 使用方式 | 是否需要 APK | 取舍 |
+| --- | --- | --- |
+| 复制 Bilibili 链接，在手机网页发送 | 不需要，本次实现 | 手机浏览器即可测试，电脑继续负责解析、账号与文件 |
+| 在系统分享菜单直接点“小米音乐” | 建议做轻量 Android 配套应用，当前未提供 | 接收 `ACTION_SEND` / `text/plain` 和 `EXTRA_TEXT`，确认后调用同一接收接口；不必将整个播放器移植到手机 |
+| 自动搜索同一 Wi-Fi 的电脑 | 原生应用可使用 NSD，当前网页未实现 | 本版使用固定地址加收藏/桌面快捷方式，避免反复扫码 |
+| 安装 PWA 作为系统分享目标 | 有浏览器及安装条件限制 | `share_target` 必须是已安装 PWA，浏览器支持不统一，不能将普通局域网页面等同于系统分享目标 |
+
+依据：[Android 官方接收分享数据文档](https://developer.android.com/develop/ui/compose/sharing/receive)、[MDN share_target 文档](https://developer.mozilla.org/en-US/docs/Web/Progressive_web_apps/Manifest/Reference/share_target)。[Android NSD 官方文档](https://developer.android.com/develop/connectivity/wifi/use-nsd)提供原生应用的 DNS-SD 发现接口，普通网页不能直接调用 NsdManager。本版按用户选择保留免安装网页，不注册系统分享菜单，也不需要 Android SDK、移动端登录或云端中转。局域网 HTTP 页面添加的是浏览器快捷方式，不宣称是可安装 PWA 或系统分享目标。
+
+安卓验收建议：使用 Chrome 打开接收页，验证短链接分享文案、普通单 P、`p=2` 多 P、重复提交、关闭页面后电脑继续下载、首次扫码免输码、收藏恢复、暂停后重新开启、重启后恢复配对、忘记手机后旧令牌失效。真实手机与路由器上的连通性需要现场验证，自动化本机 HTTP 测试不能替代这一项。
+
 ## 开发运行
 
 需要 Node.js 22+、Rust stable 和对应平台的 Tauri 2 构建环境：
@@ -170,17 +202,19 @@ npm run fmt -- --check
 
 音乐库索引存放在系统应用数据目录中的 `com.localmusic.xiaomi-dlna/library.json`，macOS 通常在 `~/Library/Application Support/` 下，Windows 通常在 `%APPDATA%` 下。原文件留在导入位置。Bilibili 下载音频由应用保存在同目录下的 `downloads/`，索引中保留来源链接；只记录所选公开视频页，不记录带签名的临时下载地址。
 
-控制入口仅为本地桌面 IPC，没有局域网管理网页或控制 API。HTTP 只提供带随机会话令牌的已导入歌曲，支持单段 Range。应用重启后旧音乐链接失效。设备描述和控制地址仅允许本机 / 局域网地址，不跟随重定向，不使用系统代理。
+播放、曲库管理及账号设置使用本地桌面 IPC。媒体 HTTP 服务提供带随机会话令牌的已导入歌曲，支持单段 Range，应用重启后旧音乐链接失效。用户主动开启“手机发送”时，另一个独立局域网入口仅提供配对、视频解析、所选音轨下载及本次任务状态；暂停或重启会停止接收但保留手机配对；“忘记手机”清除配对。设备描述和控制地址仅允许本机 / 局域网地址，不跟随重定向，不使用系统代理。
 
 ## 代码结构
 
 ```text
 frontend/                 中文桌面界面
+mobile/                   免安装手机发送页面（编译进桌面应用）
 src-tauri/src/desktop.rs   Tauri 命令、原生选择器、生命周期
 src-tauri/src/engine.rs    状态、播放队列、自动发现与轮询
 src-tauri/src/dlna.rs      SSDP、设备描述、UPnP SOAP
 src-tauri/src/library.rs   本地文件索引与持久化
 src-tauri/src/media.rs     带会话令牌的 HTTP 音乐流
+src-tauri/src/mobile.rs    主动开启的局域网配对与音乐导入入口
 src-tauri/src/voice.rs     小爱会话、新指令轮询与本地命令解析
 src-tauri/src/bilibili.rs  视频解析、WBI、音轨下载队列与原子入库
 src-tauri/src/online.rs    有界在线响应、Cookie 范围与网络超时
