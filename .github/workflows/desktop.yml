@@ -76,6 +76,9 @@ jobs:
         run: |
           node -e "require('node:fs').rmSync('src-tauri/target/${{ matrix.target }}/release/bundle', { recursive: true, force: true })"
       - run: npm run build -- --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+      - name: Verify macOS app signature and packaged disk image
+        if: runner.os == 'macOS'
+        run: node scripts/verify-macos.mjs "src-tauri/target/${{ matrix.target }}/release/bundle" "${{ matrix.target }}"
       - uses: actions/cache/save@v4
         if: always() && steps.rust-cache.outcome == 'success' && steps.rust-cache.outputs.cache-hit != 'true'
         with:

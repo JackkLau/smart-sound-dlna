@@ -12,7 +12,11 @@ Windows / macOS 桌面客户端，将电脑里的本地音乐通过 DLNA 投送�
 | macOS Apple Silicon | [下载 DMG](https://github.com/JackkLau/smart-sound-dlna/releases/latest/download/xiaomi-music-macos-apple-silicon.dmg) |
 | macOS Intel | [下载 DMG](https://github.com/JackkLau/smart-sound-dlna/releases/latest/download/xiaomi-music-macos-intel.dmg) |
 
-[版本说明与历史安装包](https://github.com/JackkLau/smart-sound-dlna/releases/latest) · [SHA-256 校验值](https://github.com/JackkLau/smart-sound-dlna/releases/latest/download/SHA256SUMS) · [构建记录](https://github.com/JackkLau/smart-sound-dlna/actions/workflows/desktop.yml)。安装包暂未签名或公证。
+[版本说明与历史安装包](https://github.com/JackkLau/smart-sound-dlna/releases/latest) · [SHA-256 校验值](https://github.com/JackkLau/smart-sound-dlna/releases/latest/download/SHA256SUMS) · [构建记录](https://github.com/JackkLau/smart-sound-dlna/actions/workflows/desktop.yml)。macOS 使用完整的临时签名（Ad Hoc），尚未通过 Apple 公证；Windows 暂无发行证书签名。
+
+macOS：打开 DMG 后，先将应用拖到“应用程序”，再启动应用。如果系统提示无法验证开发者，可在“系统设置 → 隐私与安全性”中检查并选择“仍要打开”。临时签名保证应用包的资源完整性，不代表 Apple 认证。要实现下载后直接打开、无需这一步，需要 Developer ID 证书及 Apple 公证。详见 [Tauri 官方签名说明](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing)。
+
+0.7.1 及更早的 Mac 包遗漏了整个应用包的资源签名，可能被提示“已损坏”。0.7.2 起在制作 DMG 前完成应用签名，发布前还会挂载实际 DMG，校验包内应用的签名、版本、架构和可执行文件，阻止同类坏包发布。
 
 ## 使用
 
@@ -173,7 +177,7 @@ npm run build -- --bundles app,dmg
 
 Windows 安装后无需开发工具。首次运行时将电脑与音响连接同一局域网，并在防火墙提示中允许此应用访问私人网络。优先用一首本地 MP3 验证发现和播放，再测试 Bilibili 导入、曲名修改与曲库移除。
 
-当前配置未包含发行证书或 Apple 公证。面向他人分发前，可按 [Windows 签名](https://v2.tauri.app/distribute/sign/windows/)与 [macOS 签名 / 公证](https://v2.tauri.app/distribute/sign/macos/)配置证书；本地开发不依赖签名证书。
+当前配置对完整 macOS 应用进行临时签名（`bundle.macOS.signingIdentity: "-"`），并在 CI 中验证构建目录和 DMG 内的实际应用。临时签名仍不具备 Developer ID 信任或 Apple 公证；需要无额外确认的分发时，按 [Windows 签名](https://v2.tauri.app/distribute/sign/windows/)与 [macOS 签名 / 公证](https://v2.tauri.app/distribute/sign/macos/)配置发行证书和公证凭据。不要将私钥或公证密钥写入仓库。
 
 ## 测试
 
