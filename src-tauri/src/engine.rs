@@ -178,8 +178,13 @@ impl Player {
             self.volume = status.volume;
         }
         let duration = self.duration;
-        self.completion
-            .observe(&status.transport_state, status.position, duration, now)
+        self.completion.observe(
+            &status.transport_state,
+            status.position,
+            duration,
+            now,
+            status.position_valid,
+        )
     }
 }
 
@@ -210,17 +215,44 @@ impl Completion {
             .max(self.playing.map(|(position, _, _)| position).unwrap_or(0));
         self.playing = None;
     }
-    fn observe(&mut self, state: &str, position: u64, duration: u64, now: Instant) -> bool {
+    fn observe(
+        &mut self,
+        state: &str,
+        position: u64,
+        duration: u64,
+        now: Instant,
+        position_valid: bool,
+    ) -> bool {
         if !self.armed {
             return false;
         }
         match state {
             "PLAYING" => {
+                // Real Xiaomi firmware can loop the same URI without ever
+                // reporting STOPPED, even after accepting NORMAL play mode.
+                // Require fresh measured end -> head progress; elapsed time
+                // alone must never interrupt a PLAYING song.
+                let wrapped = position_valid
+                    && self.playing.is_some_and(|(last, length, at)| {
+                        let age = now.duration_since(at);
+                        let tolerance = age.as_secs().saturating_add(2).clamp(3, 10);
+                        age <= Duration::from_secs(10)
+                            && length > 0
+                            && last.saturating_add(tolerance) >= length
+                            && last <= length.saturating_add(tolerance)
+                            && position <= tolerance
+                            && last > position.saturating_add(tolerance)
+                    });
+                if wrapped {
+                    self.armed = false;
+                    self.clear_observation();
+                    return true;
+                }
                 // Some Xiaomi renderers report 00:00:00 throughout playback.
                 // Elapsed evidence is used only after a confirmed STOPPED, never
                 // to interrupt a PLAYING song with a timer.
                 self.started.get_or_insert(now);
-                self.playing = Some((position, duration, now));
+                self.playing = Some((if position_valid { position } else { 0 }, duration, now));
                 false
             }
             "PAUSED_PLAYBACK" => {
@@ -861,9 +893,18 @@ impl Engine {
             direction,
             automatic,
         );
+        let stop_at_boundary = automatic && p.current.is_some() && p.transport == "PLAYING";
         drop(p);
         if let Some(id) = next {
             self.play_locked(&id).await?;
+        } else if stop_at_boundary {
+            // A renderer that wrapped while PLAYING must also be stopped at
+            // the end of a sequential queue, rather than repeating the last song.
+            Controller::new(self.selected().await?).stop().await?;
+            let mut p = self.player.lock().await;
+            p.transport = "STOPPED".into();
+            p.position = 0;
+            p.completion = Completion::default();
         }
         Ok(())
     }
@@ -1042,10 +1083,10 @@ mod tests {
             armed: true,
             ..Default::default()
         };
-        assert!(!c.observe("PLAYING", 0, 30, now));
-        assert!(!c.observe("PLAYING", 0, 30, now + Duration::from_secs(60)));
+        assert!(!c.observe("PLAYING", 0, 30, now, true));
+        assert!(!c.observe("PLAYING", 0, 30, now + Duration::from_secs(60), true));
         c.clear_observation(); // seek, pause or lost connection invalidates elapsed evidence
-        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(62)));
+        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(62), true));
         let mut p = Player {
             current: Some("a".into()),
             uri: Some("http://pc/song".into()),
@@ -1071,22 +1112,110 @@ mod tests {
             armed: true,
             ..Default::default()
         };
-        c.observe("PLAYING", 0, 180, now);
-        c.observe("PAUSED_PLAYBACK", 0, 180, now + Duration::from_secs(80));
-        c.observe("PAUSED_PLAYBACK", 0, 180, now + Duration::from_secs(200));
-        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(201)));
-        c.observe("PLAYING", 0, 180, now + Duration::from_secs(300));
-        c.observe("PLAYING", 0, 180, now + Duration::from_secs(398));
-        assert!(c.observe("STOPPED", 0, 0, now + Duration::from_secs(400)));
+        c.observe("PLAYING", 0, 180, now, true);
+        c.observe(
+            "PAUSED_PLAYBACK",
+            0,
+            180,
+            now + Duration::from_secs(80),
+            true,
+        );
+        c.observe(
+            "PAUSED_PLAYBACK",
+            0,
+            180,
+            now + Duration::from_secs(200),
+            true,
+        );
+        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(201), true));
+        c.observe("PLAYING", 0, 180, now + Duration::from_secs(300), true);
+        c.observe("PLAYING", 0, 180, now + Duration::from_secs(398), true);
+        assert!(c.observe("STOPPED", 0, 0, now + Duration::from_secs(400), true));
         let mut seek = Completion {
             armed: true,
             elapsed: 170,
             ..Default::default()
         };
-        assert!(!seek.observe("STOPPED", 0, 0, now));
-        seek.observe("PLAYING", 0, 180, now);
-        seek.observe("PLAYING", 0, 180, now + Duration::from_secs(8));
-        assert!(seek.observe("STOPPED", 0, 0, now + Duration::from_secs(10)));
+        assert!(!seek.observe("STOPPED", 0, 0, now, true));
+        seek.observe("PLAYING", 0, 180, now, true);
+        seek.observe("PLAYING", 0, 180, now + Duration::from_secs(8), true);
+        assert!(seek.observe("STOPPED", 0, 0, now + Duration::from_secs(10), true));
+    }
+
+    #[test]
+    fn real_xiaomi_playing_wrap_advances_once_even_when_duration_resets() {
+        let now = Instant::now();
+        let mut p = Player {
+            current: Some("a".into()),
+            uri: Some("http://pc/song".into()),
+            local_duration: 295,
+            completion: Completion {
+                armed: true,
+                ..Default::default()
+            },
+            ..Player::default()
+        };
+        // Captured from S12: no STOPPED state, same TrackURI, 4:54 -> 0:00.
+        assert!(!p.observe_status(status("PLAYING", 292, 295, true), now));
+        assert!(!p.observe_status(
+            status("PLAYING", 294, 295, true),
+            now + Duration::from_secs(2)
+        ));
+        assert!(
+            p.observe_status(status("PLAYING", 0, 0, true), now + Duration::from_secs(4)),
+            "natural replay without STOPPED must complete the local track"
+        );
+        assert!(
+            !p.observe_status(
+                status("PLAYING", 1, 295, true),
+                now + Duration::from_secs(6)
+            ),
+            "one wrap must not advance twice"
+        );
+    }
+
+    #[test]
+    fn playing_wrap_requires_fresh_valid_progress_and_survives_user_controls() {
+        let now = Instant::now();
+        for (last, age, valid) in [(140, 2, true), (294, 30, true), (294, 2, false)] {
+            let mut c = Completion {
+                armed: true,
+                ..Default::default()
+            };
+            c.observe("PLAYING", last, 295, now, true);
+            assert!(!c.observe("PLAYING", 0, 0, now + Duration::from_secs(age), valid));
+        }
+        for reset in ["seek", "outage", "pause", "stop"] {
+            let mut c = Completion {
+                armed: true,
+                ..Default::default()
+            };
+            c.observe("PLAYING", 294, 295, now, true);
+            match reset {
+                "pause" => c.pause(now),
+                "stop" => c = Completion::default(),
+                _ => c.clear_observation(),
+            }
+            assert!(
+                !c.observe("PLAYING", 0, 295, now + Duration::from_secs(2), true),
+                "{reset}"
+            );
+        }
+        let mut p = Player {
+            current: Some("a".into()),
+            uri: Some("http://pc/song".into()),
+            local_duration: 295,
+            completion: Completion {
+                armed: true,
+                ..Default::default()
+            },
+            ..Player::default()
+        };
+        p.observe_status(status("PLAYING", 294, 295, true), now);
+        let mut external = status("PLAYING", 0, 295, true);
+        external.current_uri = Some("http://another-controller/song".into());
+        assert!(!p.observe_status(external, now + Duration::from_secs(2)));
+        assert!(p.current.is_none());
     }
 
     #[test]
@@ -1123,14 +1252,14 @@ mod tests {
             started: None,
             elapsed: 0,
         };
-        assert!(!c.observe("STOPPED", 0, 0, now));
+        assert!(!c.observe("STOPPED", 0, 0, now, true));
         c.armed = true;
-        assert!(!c.observe("PLAYING", 12, 240, now));
-        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(2)));
+        assert!(!c.observe("PLAYING", 12, 240, now, true));
+        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(2), true));
         c.armed = true;
-        c.observe("PLAYING", 238, 240, now);
-        assert!(c.observe("STOPPED", 0, 0, now + Duration::from_secs(3)));
-        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(4)));
+        c.observe("PLAYING", 238, 240, now, true);
+        assert!(c.observe("STOPPED", 0, 0, now + Duration::from_secs(3), true));
+        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(4), true));
     }
     #[test]
     fn pause_or_explicit_stop_cannot_advance() {
@@ -1141,12 +1270,12 @@ mod tests {
             started: None,
             elapsed: 0,
         };
-        c.observe("PLAYING", 238, 240, now);
-        c.observe("PAUSED_PLAYBACK", 238, 240, now);
-        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(2)));
+        c.observe("PLAYING", 238, 240, now, true);
+        c.observe("PAUSED_PLAYBACK", 238, 240, now, true);
+        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(2), true));
         c = Completion::default();
-        c.observe("PLAYING", 238, 240, now);
-        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(2)));
+        c.observe("PLAYING", 238, 240, now, true);
+        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(2), true));
     }
 
     #[test]
@@ -1158,10 +1287,16 @@ mod tests {
             started: None,
             elapsed: 0,
         };
-        assert!(!c.observe("STOPPED", 0, 0, now));
+        assert!(!c.observe("STOPPED", 0, 0, now, true));
         assert!(c.armed);
-        c.observe("PLAYING", 179, 180, now);
-        assert!(!c.observe("NO_MEDIA_PRESENT", 0, 0, now + Duration::from_secs(30)));
+        c.observe("PLAYING", 179, 180, now, true);
+        assert!(!c.observe(
+            "NO_MEDIA_PRESENT",
+            0,
+            0,
+            now + Duration::from_secs(30),
+            true
+        ));
         assert!(!c.armed);
     }
 }

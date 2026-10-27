@@ -1,6 +1,6 @@
 {
   "name": "xiaomi-dlna-desktop",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "description": "小米音响本地音乐 · Rust / Tauri 2",
   "scripts": {

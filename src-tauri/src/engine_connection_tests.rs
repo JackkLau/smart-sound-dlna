@@ -121,6 +121,128 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn playing_progress_wrap_obeys_queue_modes_and_stops_at_sequential_end() {
+    for mode in ["sequential", "repeat-all", "repeat-one"] {
+        let fixture = Fixture::new().await;
+        let second_file = fixture._directory.path().join("second.mp3");
+        std::fs::write(&second_file, b"second audio").unwrap();
+        fixture.engine.import(vec![second_file]).await.unwrap();
+        let second = fixture.engine.snapshot().await.unwrap().tracks[1]
+            .id
+            .clone();
+        fixture
+            .engine
+            .control("mode", Value::from(mode))
+            .await
+            .unwrap();
+        fixture.engine.play(&fixture.track).await.unwrap();
+        fixture.wire.state.lock().unwrap().position = 179;
+        fixture.engine.poll().await;
+        {
+            let mut renderer = fixture.wire.state.lock().unwrap();
+            renderer.position = 0;
+            renderer.zero_duration = true;
+        }
+        fixture.engine.poll().await;
+        let expected = if mode == "repeat-one" {
+            &fixture.track
+        } else {
+            &second
+        };
+        assert_eq!(
+            fixture
+                .engine
+                .snapshot()
+                .await
+                .unwrap()
+                .current_track_id
+                .as_ref(),
+            Some(expected),
+            "{mode}"
+        );
+        fixture.engine.poll().await;
+        assert_eq!(
+            fixture
+                .wire
+                .state
+                .lock()
+                .unwrap()
+                .actions
+                .iter()
+                .filter(|a| *a == "Play")
+                .count(),
+            2,
+            "{mode} advanced twice"
+        );
+
+        {
+            let mut renderer = fixture.wire.state.lock().unwrap();
+            renderer.position = 179;
+            renderer.zero_duration = false;
+        }
+        fixture.engine.poll().await;
+        fixture.wire.state.lock().unwrap().position = 0;
+        fixture.engine.poll().await;
+        let snapshot = fixture.engine.snapshot().await.unwrap();
+        if mode == "sequential" {
+            assert_eq!(snapshot.current_track_id.as_ref(), Some(&second));
+            assert_eq!(snapshot.transport_state, "STOPPED");
+            let renderer = fixture.wire.state.lock().unwrap();
+            assert_eq!(renderer.transport, "STOPPED");
+            assert_eq!(renderer.actions.iter().filter(|a| *a == "Play").count(), 2);
+        } else {
+            assert_eq!(
+                snapshot.current_track_id.as_ref(),
+                Some(&fixture.track),
+                "{mode}"
+            );
+            assert_eq!(
+                fixture
+                    .wire
+                    .state
+                    .lock()
+                    .unwrap()
+                    .actions
+                    .iter()
+                    .filter(|a| *a == "Play")
+                    .count(),
+                3
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn backward_seek_cannot_be_mistaken_for_a_natural_playing_wrap() {
+    let fixture = Fixture::new().await;
+    fixture.engine.play(&fixture.track).await.unwrap();
+    fixture.wire.state.lock().unwrap().position = 179;
+    fixture.engine.poll().await;
+    fixture
+        .engine
+        .control("seek", Value::from(0))
+        .await
+        .unwrap();
+    fixture.wire.state.lock().unwrap().position = 0;
+    fixture.engine.poll().await;
+    let snapshot = fixture.engine.snapshot().await.unwrap();
+    assert_eq!(snapshot.current_track_id.as_ref(), Some(&fixture.track));
+    assert_eq!(snapshot.transport_state, "PLAYING");
+    assert_eq!(
+        fixture
+            .wire
+            .state
+            .lock()
+            .unwrap()
+            .actions
+            .iter()
+            .filter(|a| *a == "Play")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn automatic_queue_survives_a_startup_stop_and_terminal_position_loss() {
     for terminal in ["STOPPED", "NO_MEDIA_PRESENT"] {
         let fixture = Fixture::new().await;
@@ -256,7 +378,7 @@ async fn offline_device_is_visible_and_recovers_without_replaying_or_advancing()
         player.queue_mode = "repeat-one".into();
         player
             .completion
-            .observe("PLAYING", 179, 180, Instant::now());
+            .observe("PLAYING", 179, 180, Instant::now(), true);
     }
     fixture.wire.state.lock().unwrap().offline = true;
     fixture.engine.poll().await;
