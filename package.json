@@ -7,14 +7,47 @@
     "tauri": "node scripts/tauri.mjs",
     "dev": "node scripts/tauri.mjs dev",
     "build": "node scripts/tauri.mjs build",
-    "check:ui": "node --check frontend/app.js && node --check frontend/features.js && node --check frontend/import-selection.js && node --check frontend/imports.js && node --check frontend/track-editor.js && node --check frontend/library-actions.js && node --check frontend/mobile.js && node --check mobile/app.js",
+    "check:ui": "eslint frontend/src mobile/src xiaomi_dlna/static/src",
     "test": "node scripts/cargo.mjs test --manifest-path src-tauri/Cargo.toml --locked",
     "test:core": "node scripts/cargo.mjs test --manifest-path src-tauri/Cargo.toml --locked --no-default-features",
     "lint": "node scripts/cargo.mjs clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings",
     "fmt": "node scripts/cargo.mjs fmt --manifest-path src-tauri/Cargo.toml",
-    "test:ui": "node --test tests/*.test.cjs"
+    "test:ui": "node --test tests/*.test.cjs && vitest run",
+    "dev:ui": "vite --mode desktop",
+    "dev:mobile": "vite --mode mobile",
+    "dev:legacy": "vite --mode legacy",
+    "build:ui": "node scripts/build-ui.mjs",
+    "test:react": "vitest run",
+    "test:browser": "node scripts/smoke-ui.mjs",
+    "pretest": "npm run build:ui",
+    "pretest:core": "npm run build:ui",
+    "prelint": "npm run build:ui",
+    "fmt:ui": "prettier --check frontend/src mobile/src xiaomi_dlna/static/src tests/react *.mjs scripts/build-ui.mjs scripts/smoke-ui.mjs"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0"
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.64.1",
+    "@tauri-apps/cli": "^2.0.0",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
+    "@vitejs/plugin-react": "^6.1.2",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "jsdom": "^30.1.3",
+    "prettier": "^3.9.10",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "qrcode-generator": "^1.4.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
   }
 }

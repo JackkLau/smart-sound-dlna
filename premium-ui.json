@@ -1,10 +1,35 @@
 {
   "profile": "product-admin",
-  "sourceRoots": ["frontend", "mobile"],
+  "sourceRoots": [
+    "frontend",
+    "mobile",
+    "xiaomi_dlna/static"
+  ],
   "locale": "zh-CN",
   "canonicalMap": "DESIGN.md",
-  "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"],
-  "ownership": { "Select/Listbox": "native" },
-  "commands": {},
-  "requiredCommands": []
+  "requiredCapabilities": [
+    "Select/Listbox",
+    "Form",
+    "Scrollbar",
+    "Toast",
+    "CRUD",
+    "Table Selection"
+  ],
+  "ownership": {
+    "Select/Listbox": "native"
+  },
+  "commands": {
+    "unit": "npm run test:ui",
+    "build": "npm run build:ui",
+    "browser": "npm run test:browser"
+  },
+  "requiredCommands": [
+    "unit",
+    "build",
+    "browser"
+  ],
+  "evidence": {
+    "crudFullFlow": "tests/react/desktop.test.jsx",
+    "failurePaths": "tests/react/mobile.test.jsx"
+  }
 }

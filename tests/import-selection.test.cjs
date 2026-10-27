@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const Selection = require('../frontend/import-selection.js');
+const Selection = require('../frontend/import-selection.js').default;
 const preview = (bvid, cids, selected_page = 1, id = bvid) => ({
   bvid, id, selected_page, parts: cids.map((cid, i) => ({ cid, page: i + 1 })),
 });

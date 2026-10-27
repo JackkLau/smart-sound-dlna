@@ -13,7 +13,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check:ui
+      - run: npm run fmt:ui
+      - run: npm run test:ui
+      - run: npm run build:ui
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+
   desktop:
+    needs: frontend
     strategy:
       fail-fast: false
       matrix:
@@ -50,6 +67,7 @@ jobs:
             rust-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('src-tauri/Cargo.lock') }}-
             rust-${{ runner.os }}-${{ runner.arch }}-
       - run: npm ci
+      - run: npm run build:ui
       - run: npm run check:ui
       - run: npm run test:ui
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check

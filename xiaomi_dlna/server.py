@@ -356,9 +356,12 @@ class Handler(BaseHTTPRequestHandler):
                             "formats": list(MIME_TYPES), "max_upload_bytes": MAX_UPLOAD_BYTES})
             elif path == "/api/state":
                 self._json(self.app.state())
-            elif path in ("/", "/index.html", "/style.css", "/app.js", "/static/style.css", "/static/app.js"):
+            elif path in ("/", "/index.html", "/app.css", "/style.css", "/app.js",
+                          "/static/app.css", "/static/style.css", "/static/app.js"):
                 name = "index.html" if path == "/" else path.rsplit("/", 1)[-1]
-                file = Path(__file__).parent / "static" / name
+                if name == "style.css":
+                    name = "app.css"
+                file = Path(__file__).parent / "static" / "dist" / name
                 mime = {"html": "text/html", "css": "text/css", "js": "text/javascript"}[file.suffix[1:]]
                 body = file.read_bytes()
                 self._headers(200, mime + "; charset=utf-8", len(body), {
