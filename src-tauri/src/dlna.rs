@@ -941,7 +941,21 @@ impl Controller {
         )
         .await
         .map_err(|error| error.message)?;
+        self.normal_mode().await?;
         self.resume().await
+    }
+
+    /// The PC owns the queue. A renderer's retained REPEAT_ONE would never
+    /// reach STOPPED and therefore could not advance our local queue.
+    pub async fn normal_mode(&self) -> Result<(), String> {
+        match self
+            .soap("SetPlayMode", &[("NewPlayMode", "NORMAL".into())], false)
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(error) if matches!(error.code, Some(401 | 712)) => Ok(()),
+            Err(error) => Err(error.message),
+        }
     }
 
     pub async fn pause(&self) -> Result<(), String> {
@@ -1537,9 +1551,13 @@ mod tests {
                     .iter()
                     .map(|action| action.0.as_str())
                     .collect::<Vec<_>>(),
-                ["Stop", "SetAVTransportURI", "Play"]
+                ["Stop", "SetAVTransportURI", "SetPlayMode", "Play"]
             );
             assert_eq!(state.actions[1].1, "/base/transport");
+            assert_eq!(
+                action_arguments(&state.actions[2].2)["NewPlayMode"],
+                "NORMAL"
+            );
             let arguments = action_arguments(&state.actions[1].2);
             assert_eq!(arguments["InstanceID"], "0");
             assert_eq!(arguments["CurrentURI"], uri);
@@ -1594,6 +1612,42 @@ mod tests {
             .unwrap();
         assert_eq!(volume.1, "/rendering");
         assert_eq!(action_arguments(&volume.2)["DesiredVolume"], "42");
+    }
+
+    #[tokio::test]
+    async fn local_queue_clears_renderer_repeat_mode_with_optional_capability_fallback() {
+        let renderer = MockRenderer::start().await;
+        let controller = Controller::new(renderer.device().await);
+        for code in [401, 712] {
+            renderer
+                .state
+                .lock()
+                .unwrap()
+                .fail_actions
+                .insert("SetPlayMode".into(), code);
+            controller
+                .play(&format!("{}/song.mp3", renderer.base), "Song", "audio/mpeg")
+                .await
+                .unwrap();
+        }
+        renderer
+            .state
+            .lock()
+            .unwrap()
+            .fail_actions
+            .insert("SetPlayMode".into(), 705);
+        renderer.state.lock().unwrap().actions.clear();
+        assert!(controller
+            .play(&format!("{}/song.mp3", renderer.base), "Song", "audio/mpeg")
+            .await
+            .is_err());
+        assert!(!renderer
+            .state
+            .lock()
+            .unwrap()
+            .actions
+            .iter()
+            .any(|a| a.0 == "Play"));
     }
 
     #[tokio::test]
@@ -1695,7 +1749,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_or_invalid_position_disarms_completion_but_volume_failure_does_not() {
+    async fn missing_or_invalid_position_requests_timing_fallback_but_volume_failure_does_not() {
         let renderer = MockRenderer::start().await;
         let controller = Controller::new(renderer.device().await);
         renderer

@@ -1,12 +1,34 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>发送音乐到电脑</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/mobile.css"><script src="/app.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>手机点歌 · 小米音响</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/mobile.css"><script src="/app.js" defer></script></head>
 <body class="mobile-page">
-  <header class="mobile-heading"><span class="eyebrow">小米音响 · 本地音乐</span><h1>发送音乐到电脑</h1><p>在 Bilibili 复制视频分享链接，在这里粘贴。电脑负责解析、下载并加入曲库。</p></header>
+  <header class="mobile-heading"><span class="eyebrow">小米音响 · 本地音乐</span><h1>手机点歌</h1><p>选择电脑曲库中的歌曲，由电脑推送到音响。也可以发送 Bilibili 视频，下载音轨到电脑。</p></header>
   <main>
     <section id="pair-panel" aria-labelledby="pair-title">
       <h2 id="pair-title">连接电脑</h2><p id="pair-status" class="field-help" role="status">正在连接电脑…</p>
       <button disabled id="connection-retry" class="button outline" type="button">重试连接</button>
+    </section>
+    <section id="listen-panel" hidden aria-labelledby="listen-title">
+      <h2 id="listen-title">电脑音乐库</h2>
+      <p id="speaker-status" class="field-help" role="status">正在读取音响状态…</p>
+      <strong id="playing-title">还没有播放音乐</strong>
+      <form id="mode-form" novalidate>
+        <label class="field-label" for="phone-mode">播放模式</label>
+        <select disabled id="phone-mode" class="text-input" aria-describedby="mode-error"><option value="sequential">顺序播放</option><option value="repeat-all">列表循环</option><option value="repeat-one">单曲循环</option></select>
+        <button disabled type="submit" class="button outline">应用播放模式</button>
+        <p id="mode-error" class="field-error" role="alert"></p>
+      </form>
+      <p id="phone-queue-help" class="field-help">顺序按电脑的完整曲库排列，搜索只用于找歌。</p>
+      <div id="phone-transport" class="mobile-transport" aria-label="音响控制"><button disabled id="phone-previous" type="button" class="button outline">上一首</button><button disabled id="phone-toggle" type="button" class="button primary">播放</button><button disabled id="phone-next" type="button" class="button outline">下一首</button><button disabled id="phone-stop" type="button" class="button outline">停止</button></div>
+      <button disabled id="phone-play-all" type="button" class="button outline">播放全部 · 从第一首顺序播放</button>
+      <p id="listen-error" class="field-error" role="alert"></p>
+      <label class="field-label" for="phone-search">搜索曲名</label>
+      <div class="mobile-search"><input id="phone-search" type="search" class="text-input" maxlength="120" placeholder="搜索电脑曲库" autocomplete="off"><button disabled hidden id="phone-clear" type="button" class="button outline">清空</button></div>
+      <p id="library-status" class="field-help" role="status">正在读取曲库…</p>
+      <ul id="phone-tracks" class="mobile-tracks" aria-label="电脑曲库中的音乐"></ul>
+      <div class="mobile-pagination"><button disabled id="phone-page-previous" type="button" class="button outline">上一页</button><span id="phone-page-info">1 / 1</span><button disabled id="phone-page-next" type="button" class="button outline">下一页</button></div>
+      <button disabled id="library-retry" type="button" class="button outline">刷新曲库与音响状态</button>
+      <p class="field-help">先在电脑选择并连接音响。点击歌曲会立即播放，并按已应用的模式继续；电脑应用需保持运行。</p>
     </section>
     <section id="send-panel" hidden aria-labelledby="send-title">
       <div class="mobile-section-heading"><h2 id="send-title">选择视频音轨</h2><span class="field-help">已连接电脑</span></div>

@@ -38,7 +38,7 @@ export async function prepareRelease(input, output, { version, sha, runUrl }) {
   await mkdir(output, { recursive: true });
   for (const item of packages) await writeFile(path.join(output, item.name), item.bytes, { flag: 'wx' });
   await writeFile(path.join(output, 'SHA256SUMS'), packages.map(item => `${item.sha256}  ${item.name}\n`).join(''), { flag: 'wx' });
-  await writeFile(path.join(output, 'release-notes.md'), `小米音乐投送 ${version}\n\n- 修复 macOS 应用资源未封装签名导致“已损坏”的打包问题。\n- 发布前校验实际 DMG 内应用的资源签名、版本、架构与可执行文件。\n- Windows x64、macOS Apple Silicon 与 Intel 安装包均经过原生测试和构建。\n\n源码：${sha}\n构建记录：${runUrl}\n\nmacOS 使用完整的临时签名（Ad Hoc），尚未通过 Apple 公证；Windows 暂无发行证书签名。Mac 首次安装请先拖到“应用程序”；如提示无法验证开发者，可在“系统设置 → 隐私与安全性”检查并选择“仍要打开”。临时签名不等于 Apple 认证。\n`, { flag: 'wx' });
+  await writeFile(path.join(output, 'release-notes.md'), `小米音乐投送 ${version}\n\n- 修复音响时长为零或进度缺失时无法顺序切歌；清除音响残留的单曲循环模式。\n- 增加播放全部与下一曲提示；扫码手机页面支持曲库点歌、播放模式与音响控制。\n- 保留 macOS 完整临时签名与实际 DMG 校验。\n- Windows x64、macOS Apple Silicon 与 Intel 安装包均经过原生测试和构建。\n\n源码：${sha}\n构建记录：${runUrl}\n\nmacOS 使用完整的临时签名（Ad Hoc），尚未通过 Apple 公证；Windows 暂无发行证书签名。Mac 首次安装请先拖到“应用程序”；如提示无法验证开发者，可在“系统设置 → 隐私与安全性”检查并选择“仍要打开”。临时签名不等于 Apple 认证。\n`, { flag: 'wx' });
   return packages.map(({ name, sha256 }) => ({ name, sha256 }));
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

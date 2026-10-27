@@ -130,3 +130,16 @@ test('empty discovery offers a manual search and status polling does not trigger
   await ui.node('discover').handlers.click();
   assert.equal(ui.calls.filter((c) => c.command === 'discover_devices').length, 1);
 });
+
+test('play-all is one atomic command and queue help explains the next track and final boundary', async () => {
+  const ui = harness();
+  const tracks = [{ id: 'a', title: 'First', filename: 'a.mp3', format: 'mp3', size: 1 }, { id: 'b', title: 'Second', filename: 'b.mp3', format: 'mp3', size: 1 }];
+  await ui.update({ device_connection: 'connected', tracks, current_track_id: 'a', queue_mode: 'sequential' });
+  assert.match(ui.node('queue-help').textContent, /下一首：Second/);
+  await ui.node('play-all').handlers.click();
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.calls.filter(c => c.command === 'control').at(-1).args)), { action: 'play-all', value: null });
+  await ui.update({ current_track_id: 'b' });
+  assert.match(ui.node('queue-help').textContent, /最后一首，播完停止/);
+  await ui.update({ queue_mode: 'repeat-all' });
+  assert.match(ui.node('queue-help').textContent, /下一首：First/);
+});

@@ -356,6 +356,11 @@
       $('volume-label').textContent = state.volume === null ? '—' : String(state.volume);
     }
     $('volume').title = state.volume === null ? '音响暂未提供音量控制' : '音量';
+    $('play-all').disabled = !ready || !state.tracks.length;
+    const index = state.tracks.findIndex((track) => track.id === state.current_track_id);
+    const next = state.queue_mode === 'repeat-one' ? current : state.tracks[index + 1] || (state.queue_mode === 'repeat-all' ? state.tracks[0] : null);
+    const modeName = { sequential: '顺序播放', 'repeat-all': '列表循环', 'repeat-one': '单曲循环' }[state.queue_mode] || '顺序播放';
+    $('queue-help').textContent = `${modeName} · ${current ? next ? `下一首：${next.title}` : '已到曲库最后一首，播完停止' : '点击任意歌曲后，按完整曲库顺序继续'}；电脑应用需保持运行。`;
     $('mode').disabled = !available || mutationBusy || importPending;
     if (document.activeElement !== $('mode')) $('mode').value = state.queue_mode || 'sequential';
     $('discover').disabled = !available || mutationBusy || importPending || state.discovering || discoveryPending;
@@ -388,6 +393,7 @@
   $('seek').addEventListener('change', () => control('seek', Number($('seek').value)));
   $('volume').addEventListener('input', () => { $('volume-label').textContent = $('volume').value; });
   $('volume').addEventListener('change', () => control('volume', Number($('volume').value)));
+  $('play-all').addEventListener('click', () => control('play-all'));
   $('mode').addEventListener('change', () => control('mode', $('mode').value));
   $('discover').addEventListener('click', async () => {
     if (discoveryPending || state.discovering) return;

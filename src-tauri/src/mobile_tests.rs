@@ -167,7 +167,7 @@ async fn lan_boundary_requires_pairing_and_revokes_access() {
     );
     let page = client.get(f.url("/")).send().await.unwrap();
     assert_eq!(page.headers()["cache-control"], "no-store");
-    assert!(page.text().await.unwrap().contains("发送音乐到电脑"));
+    assert!(page.text().await.unwrap().contains("手机点歌"));
     let token = f.pair().await;
     assert_eq!(
         client
@@ -484,4 +484,174 @@ async fn phone_single_and_multi_part_downloads_reach_the_pc_library() {
     f.running.state.shutdown.cancel();
     assert_eq!(f.engine.snapshot().await.unwrap().tracks.len(), 3);
     assert!(!f.engine.cancellation().is_cancelled());
+}
+
+#[test]
+fn phone_playback_only_accepts_typed_allowlisted_commands() {
+    for value in [
+        json!({"action":"mode", "mode":"sequential"}),
+        json!({"action":"play", "device_id":"speaker", "track_id":"song"}),
+        json!({"action":"control", "device_id":"speaker", "command":"next"}),
+        json!({"action":"play-all", "device_id":"speaker"}),
+    ] {
+        assert!(serde_json::from_value::<PlaybackRequest>(value).is_ok());
+    }
+    for value in [
+        json!({"action":"mode", "mode":"random"}),
+        json!({"action":"play", "track_id":"song"}),
+        json!({"action":"control", "device_id":"speaker", "command":"remove-track"}),
+        json!({"action":"play", "device_id":"speaker", "track_id":"song", "path":"/etc/passwd"}),
+        json!({"action":"set-device", "url":"http://example.com"}),
+    ] {
+        assert!(serde_json::from_value::<PlaybackRequest>(value).is_err());
+    }
+}
+
+#[tokio::test]
+async fn phone_library_is_paired_paged_and_controls_require_current_speaker() {
+    let f = Fixture::new().await;
+    for path in ["/api/library", "/api/playback"] {
+        let response = if path.ends_with("playback") {
+            f.client()
+                .post(f.url(path))
+                .json(&json!({"action":"mode", "mode":"sequential"}))
+                .send()
+                .await
+                .unwrap()
+        } else {
+            f.client().get(f.url(path)).send().await.unwrap()
+        };
+        assert_eq!(response.status(), 401);
+    }
+    let token = f.pair().await;
+    for i in 0..23 {
+        let file = f._directory.path().join(format!("song-{i:02}.mp3"));
+        std::fs::write(&file, b"test audio").unwrap();
+        f.engine.import(vec![file]).await.unwrap();
+    }
+    let response: Value = f
+        .client()
+        .get(f.url("/api/library?page=999"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(response["page"], 2);
+    assert_eq!(response["tracks"].as_array().unwrap().len(), 3);
+    let serialized = response.to_string();
+    for forbidden in [
+        "filename",
+        "path",
+        "source",
+        "av_transport_url",
+        "media_port",
+    ] {
+        assert!(!serialized.contains(forbidden));
+    }
+    let mode: Value = f
+        .client()
+        .post(f.url("/api/playback"))
+        .bearer_auth(&token)
+        .json(&json!({"action":"mode", "mode":"repeat-all"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(mode["mode"], "repeat-all");
+    assert_eq!(f.engine.snapshot().await.unwrap().queue_mode, "repeat-all");
+    let denied = f.client().post(f.url("/api/playback")).bearer_auth(&token).json(&json!({"action":"play", "device_id":"stale-speaker", "track_id":response["tracks"][0]["id"]})).send().await.unwrap();
+    assert_eq!(denied.status(), 409);
+    assert!(f
+        .engine
+        .snapshot()
+        .await
+        .unwrap()
+        .current_track_id
+        .is_none());
+    let filtered: Value = f
+        .client()
+        .get(f.url("/api/library?q=song-01"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(filtered["total"], 1);
+    assert_eq!(filtered["tracks"][0]["title"], "song-01");
+}
+
+#[test]
+fn phone_library_projection_without_network_omits_paths_and_clamps_pages() {
+    let tracks = (0..23)
+        .map(|i| crate::library::Track {
+            id: format!("id-{i}"),
+            title: format!("Song {i:02}"),
+            filename: "private-file-name.mp3".into(),
+            format: "mp3".into(),
+            size: 100,
+            source: None,
+        })
+        .collect();
+    let snapshot = Snapshot {
+        tracks,
+        devices: vec![],
+        selected_device_id: None,
+        device_connection: crate::engine::ConnectionState::Unselected,
+        current_track_id: None,
+        transport_state: "STOPPED".into(),
+        position: 0,
+        duration: 0,
+        volume: None,
+        status_error: Some("/private/path".into()),
+        warnings: vec![],
+        queue_mode: "sequential".into(),
+        discovering: false,
+        discovery_error: None,
+        interfaces: vec!["secret-interface".into()],
+        media_port: 9999,
+    };
+    let data = phone_library(
+        &snapshot,
+        &LibraryQuery {
+            q: "SONG".into(),
+            page: usize::MAX,
+        },
+    );
+    assert_eq!(data["page"], 2);
+    assert_eq!(data["tracks"].as_array().unwrap().len(), 3);
+    let text = data.to_string();
+    for hidden in [
+        "private-file-name",
+        "/private/path",
+        "secret-interface",
+        "9999",
+        "source",
+        "filename",
+    ] {
+        assert!(!text.contains(hidden));
+    }
+    let empty = phone_library(
+        &snapshot,
+        &LibraryQuery {
+            q: "absent".into(),
+            page: 2,
+        },
+    );
+    assert_eq!(empty["total"], 0);
+    assert_eq!(empty["page"], 1);
+    let found = phone_library(
+        &snapshot,
+        &LibraryQuery {
+            q: "song 01".into(),
+            page: 0,
+        },
+    );
+    assert_eq!(found["tracks"][0]["title"], "Song 01");
 }

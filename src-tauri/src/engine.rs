@@ -119,6 +119,7 @@ struct Player {
     discovery_error: Option<String>,
     interfaces: Vec<String>,
     completion: Completion,
+    local_duration: u64,
 }
 
 impl Default for Player {
@@ -140,7 +141,45 @@ impl Default for Player {
             discovery_error: None,
             interfaces: vec![],
             completion: Completion::default(),
+            local_duration: 0,
         }
+    }
+}
+
+impl Player {
+    fn observe_status(&mut self, status: dlna::TransportStatus, now: Instant) -> bool {
+        self.connection.connected();
+        self.error = if status.warnings.is_empty() {
+            None
+        } else {
+            Some(status.warnings.join("；"))
+        };
+        // Another controller may have taken over this speaker.
+        if status
+            .current_uri
+            .as_ref()
+            .is_some_and(|uri| !uri.is_empty() && self.uri.as_ref().is_some_and(|ours| ours != uri))
+        {
+            self.current = None;
+            self.uri = None;
+            self.local_duration = 0;
+            self.completion = Completion::default();
+        }
+        self.transport = status.transport_state.clone();
+        self.position = status.position;
+        self.duration = if status.duration > 0 {
+            status.duration
+        } else if self.current.is_some() {
+            self.local_duration
+        } else {
+            0
+        };
+        if status.volume.is_some() {
+            self.volume = status.volume;
+        }
+        let duration = self.duration;
+        self.completion
+            .observe(&status.transport_state, status.position, duration, now)
     }
 }
 
@@ -149,20 +188,43 @@ impl Default for Player {
 struct Completion {
     armed: bool,
     playing: Option<(u64, u64, Instant)>,
+    started: Option<Instant>,
+    elapsed: u64,
 }
 
 impl Completion {
+    fn clear_observation(&mut self) {
+        self.playing = None;
+        self.started = None;
+        self.elapsed = 0;
+    }
+    fn pause(&mut self, now: Instant) {
+        let elapsed = self
+            .started
+            .take()
+            .map(|start| now.duration_since(start).as_secs())
+            .unwrap_or(0);
+        self.elapsed = self
+            .elapsed
+            .saturating_add(elapsed)
+            .max(self.playing.map(|(position, _, _)| position).unwrap_or(0));
+        self.playing = None;
+    }
     fn observe(&mut self, state: &str, position: u64, duration: u64, now: Instant) -> bool {
         if !self.armed {
             return false;
         }
         match state {
             "PLAYING" => {
+                // Some Xiaomi renderers report 00:00:00 throughout playback.
+                // Elapsed evidence is used only after a confirmed STOPPED, never
+                // to interrupt a PLAYING song with a timer.
+                self.started.get_or_insert(now);
                 self.playing = Some((position, duration, now));
                 false
             }
             "PAUSED_PLAYBACK" => {
-                self.playing = None;
+                self.pause(now);
                 false
             }
             "STOPPED" | "NO_MEDIA_PRESENT" => {
@@ -178,9 +240,14 @@ impl Completion {
                         .as_secs()
                         .saturating_add(2)
                         .clamp(3, 10);
+                    let observed = self
+                        .started
+                        .map(|start| now.duration_since(start).as_secs())
+                        .unwrap_or(0)
+                        .saturating_add(self.elapsed);
                     elapsed <= Duration::from_secs(10)
                         && length > 0
-                        && last.saturating_add(tolerance) >= length
+                        && last.max(observed).saturating_add(tolerance) >= length
                 };
                 self.armed = false;
                 completed
@@ -417,6 +484,7 @@ impl Engine {
             p.transport = "STOPPED".into();
             p.position = 0;
             p.duration = 0;
+            p.local_duration = 0;
             p.volume = None;
             p.error = None;
             p.connection = Connection::default();
@@ -515,6 +583,7 @@ impl Engine {
             p.transport = "STOPPED".into();
             p.position = 0;
             p.duration = 0;
+            p.local_duration = 0;
             p.completion = Completion::default();
         }
         drop(_guard);
@@ -602,16 +671,50 @@ impl Engine {
         self.snapshot().await
     }
 
+    async fn check_remote_device(&self, expected: &str) -> Result<(), String> {
+        let p = self.player.lock().await;
+        if p.selected.as_deref() != Some(expected) {
+            return Err("电脑选择的音响已改变，请刷新后重试。".into());
+        }
+        if p.connection.state != ConnectionState::Connected {
+            return Err("音响尚未连接，请先在电脑连接音响。".into());
+        }
+        Ok(())
+    }
+
+    pub async fn remote_play(&self, expected: &str, id: &str) -> Result<Snapshot, String> {
+        let guard = self.begin_action().await;
+        self.check_remote_device(expected).await?;
+        let result = self.play_locked(id).await;
+        drop(guard);
+        self.poll_wake.notify_one();
+        result?;
+        self.snapshot().await
+    }
+
+    pub async fn remote_control(&self, expected: &str, action: &str) -> Result<Snapshot, String> {
+        let guard = self.begin_action().await;
+        self.check_remote_device(expected).await?;
+        let result = self.control_locked(action, Value::Null).await;
+        drop(guard);
+        self.poll_wake.notify_one();
+        result
+    }
+
     async fn play_locked(&self, id: &str) -> Result<(), String> {
         let library = self.library.clone();
         let track_id = id.to_owned();
-        let track = tokio::task::spawn_blocking(move || {
+        let (track, file) = tokio::task::spawn_blocking(move || {
             let library = library.lock().map_err(|_| "音乐库暂时不可用".to_string())?;
-            library.open_track(&track_id)?; // Check the file before replacing playback.
-            library.get(&track_id)
+            let file = library.open_track(&track_id)?;
+            Ok::<_, String>((library.get(&track_id)?, file))
         })
         .await
         .map_err(|e| e.to_string())??;
+        let local_duration =
+            tokio::task::spawn_blocking(move || crate::track_names::audio_duration(file))
+                .await
+                .map_err(|e| e.to_string())?;
         let device = self.selected().await?;
         let route_device = device.clone();
         let host = tokio::task::spawn_blocking(move || local_address(&route_device))
@@ -634,11 +737,14 @@ impl Engine {
         p.uri = Some(uri);
         p.transport = "TRANSITIONING".into();
         p.position = 0;
-        p.duration = 0;
+        p.duration = local_duration;
+        p.local_duration = local_duration;
         p.error = None;
         p.completion = Completion {
             armed: true,
             playing: None,
+            started: None,
+            elapsed: 0,
         };
         Ok(())
     }
@@ -657,7 +763,26 @@ impl Engine {
             if !["sequential", "repeat-one", "repeat-all"].contains(&mode) {
                 return Err("无效的播放模式".into());
             }
+            let renderer = {
+                let p = self.player.lock().await;
+                p.current
+                    .as_ref()
+                    .filter(|_| p.connection.state == ConnectionState::Connected)
+                    .and_then(|_| p.selected.as_ref())
+                    .and_then(|id| p.devices.get(id))
+                    .map(|(device, _)| device.clone())
+            };
+            if let Some(device) = renderer {
+                Controller::new(device).normal_mode().await?;
+            }
             self.player.lock().await.queue_mode = mode.to_string();
+            return self.snapshot().await;
+        }
+        if action == "play-all" {
+            let tracks = self.tracks().await?;
+            let first = tracks.first().ok_or("曲库为空，请先添加音乐。")?;
+            self.play_locked(&first.id).await?;
+            self.player.lock().await.queue_mode = "sequential".into();
             return self.snapshot().await;
         }
         if action == "next" || action == "previous" {
@@ -679,7 +804,7 @@ impl Engine {
                     .filter(|v| *v <= 359_999)
                     .ok_or("无效的播放位置")?;
                 // Seeking invalidates the previous near-end observation.
-                self.player.lock().await.completion.playing = None;
+                self.player.lock().await.completion.clear_observation();
                 controller.seek(seconds).await
             }
             "volume" => {
@@ -705,7 +830,7 @@ impl Engine {
         match action {
             "pause" => {
                 p.transport = "PAUSED_PLAYBACK".into();
-                p.completion.playing = None;
+                p.completion.pause(Instant::now());
             }
             "resume" => {
                 p.transport = "TRANSITIONING".into();
@@ -715,7 +840,10 @@ impl Engine {
                 p.transport = "STOPPED".into();
                 p.position = 0;
             }
-            "seek" => p.position = value.as_u64().unwrap_or(0),
+            "seek" => {
+                p.position = value.as_u64().unwrap_or(0);
+                p.completion.elapsed = p.position;
+            }
             "volume" => p.volume = value.as_u64().map(|v| v as u8),
             _ => {}
         }
@@ -773,44 +901,7 @@ impl Engine {
             return;
         }
         let advance = match status {
-            Ok(status) => {
-                p.connection.connected();
-                p.error = if status.warnings.is_empty() {
-                    None
-                } else {
-                    Some(status.warnings.join("；"))
-                };
-                // Another controller may have taken over this speaker.
-                if status.current_uri.as_ref().is_some_and(|uri| {
-                    !uri.is_empty() && p.uri.as_ref().is_some_and(|ours| ours != uri)
-                }) {
-                    p.current = None;
-                    p.uri = None;
-                    p.completion = Completion::default();
-                }
-                p.transport = status.transport_state.clone();
-                p.position = status.position;
-                p.duration = status.duration;
-                if status.volume.is_some() {
-                    p.volume = status.volume;
-                }
-                if status.position_valid
-                    || matches!(
-                        status.transport_state.as_str(),
-                        "STOPPED" | "NO_MEDIA_PRESENT"
-                    )
-                {
-                    p.completion.observe(
-                        &status.transport_state,
-                        status.position,
-                        status.duration,
-                        Instant::now(),
-                    )
-                } else {
-                    p.completion.playing = None;
-                    false
-                }
-            }
+            Ok(status) => p.observe_status(status, Instant::now()),
             Err(error) => {
                 p.connection.failed(Instant::now());
                 p.error = Some(error);
@@ -818,7 +909,7 @@ impl Engine {
                 p.volume = None;
                 // Discard stale near-end evidence, but allow a fresh PLAYING
                 // observation to preserve queue playback after a brief outage.
-                p.completion.playing = None;
+                p.completion.clear_observation();
                 false
             }
         };
@@ -903,6 +994,101 @@ mod tests {
             })
             .collect()
     }
+    fn status(state: &str, position: u64, duration: u64, valid: bool) -> dlna::TransportStatus {
+        dlna::TransportStatus {
+            transport_state: state.into(),
+            position,
+            duration,
+            position_valid: valid,
+            volume: None,
+            current_uri: None,
+            warnings: vec![],
+        }
+    }
+    #[test]
+    fn local_duration_handles_zero_missing_and_reset_speaker_timing() {
+        for position_valid in [true, false] {
+            let now = Instant::now();
+            let mut player = Player {
+                current: Some("a".into()),
+                local_duration: 180,
+                completion: Completion {
+                    armed: true,
+                    ..Default::default()
+                },
+                ..Player::default()
+            };
+            assert!(!player.observe_status(status("PLAYING", 0, 0, position_valid), now));
+            // Timing can remain zero/unsupported throughout real playback.
+            assert!(!player.observe_status(
+                status("PLAYING", 0, 0, position_valid),
+                now + Duration::from_secs(178)
+            ));
+            assert_eq!(player.duration, 180);
+            assert!(player.observe_status(
+                status("STOPPED", 0, 0, false),
+                now + Duration::from_secs(180)
+            ));
+            assert!(!player.observe_status(
+                status("STOPPED", 0, 0, false),
+                now + Duration::from_secs(182)
+            ));
+        }
+    }
+    #[test]
+    fn timing_fallback_never_interrupts_playing_or_advances_after_pause_outage_or_takeover() {
+        let now = Instant::now();
+        let mut c = Completion {
+            armed: true,
+            ..Default::default()
+        };
+        assert!(!c.observe("PLAYING", 0, 30, now));
+        assert!(!c.observe("PLAYING", 0, 30, now + Duration::from_secs(60)));
+        c.clear_observation(); // seek, pause or lost connection invalidates elapsed evidence
+        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(62)));
+        let mut p = Player {
+            current: Some("a".into()),
+            uri: Some("http://pc/song".into()),
+            local_duration: 30,
+            completion: Completion {
+                armed: true,
+                ..Default::default()
+            },
+            ..Player::default()
+        };
+        p.observe_status(status("PLAYING", 29, 30, true), now);
+        let mut external = status("STOPPED", 0, 0, false);
+        external.current_uri = Some("http://another-controller/song".into());
+        assert!(!p.observe_status(external, now + Duration::from_secs(2)));
+        assert!(p.current.is_none());
+        assert_eq!(p.duration, 0);
+    }
+
+    #[test]
+    fn zero_progress_clock_excludes_pauses_and_respects_confirmed_seek() {
+        let now = Instant::now();
+        let mut c = Completion {
+            armed: true,
+            ..Default::default()
+        };
+        c.observe("PLAYING", 0, 180, now);
+        c.observe("PAUSED_PLAYBACK", 0, 180, now + Duration::from_secs(80));
+        c.observe("PAUSED_PLAYBACK", 0, 180, now + Duration::from_secs(200));
+        assert!(!c.observe("STOPPED", 0, 0, now + Duration::from_secs(201)));
+        c.observe("PLAYING", 0, 180, now + Duration::from_secs(300));
+        c.observe("PLAYING", 0, 180, now + Duration::from_secs(398));
+        assert!(c.observe("STOPPED", 0, 0, now + Duration::from_secs(400)));
+        let mut seek = Completion {
+            armed: true,
+            elapsed: 170,
+            ..Default::default()
+        };
+        assert!(!seek.observe("STOPPED", 0, 0, now));
+        seek.observe("PLAYING", 0, 180, now);
+        seek.observe("PLAYING", 0, 180, now + Duration::from_secs(8));
+        assert!(seek.observe("STOPPED", 0, 0, now + Duration::from_secs(10)));
+    }
+
     #[test]
     fn queue_modes_and_boundaries() {
         let tracks = tracks();
@@ -934,6 +1120,8 @@ mod tests {
         let mut c = Completion {
             armed: true,
             playing: None,
+            started: None,
+            elapsed: 0,
         };
         assert!(!c.observe("STOPPED", 0, 0, now));
         c.armed = true;
@@ -950,6 +1138,8 @@ mod tests {
         let mut c = Completion {
             armed: true,
             playing: None,
+            started: None,
+            elapsed: 0,
         };
         c.observe("PLAYING", 238, 240, now);
         c.observe("PAUSED_PLAYBACK", 238, 240, now);
@@ -965,6 +1155,8 @@ mod tests {
         let mut c = Completion {
             armed: true,
             playing: None,
+            started: None,
+            elapsed: 0,
         };
         assert!(!c.observe("STOPPED", 0, 0, now));
         assert!(c.armed);

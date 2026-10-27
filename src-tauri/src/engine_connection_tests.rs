@@ -16,6 +16,7 @@ struct Renderer {
     transport: String,
     position: u64,
     position_unavailable: bool,
+    zero_duration: bool,
 }
 struct Wire {
     state: Mutex<Renderer>,
@@ -78,7 +79,7 @@ impl Fixture {
                     "Stop" => { state.transport = "STOPPED".into(); String::new() }
                     "Pause" => { state.transport = "PAUSED_PLAYBACK".into(); String::new() }
                     "GetTransportInfo" => format!("<CurrentTransportState>{}</CurrentTransportState>", state.transport),
-                    "GetPositionInfo" => format!("<RelTime>00:{:02}:{:02}</RelTime><TrackDuration>00:03:00</TrackDuration><TrackURI>{}</TrackURI>", state.position / 60, state.position % 60, state.uri.replace('&', "&amp;")),
+                    "GetPositionInfo" => format!("<RelTime>00:{:02}:{:02}</RelTime><TrackDuration>{}</TrackDuration><TrackURI>{}</TrackURI>", state.position / 60, state.position % 60, if state.zero_duration { "00:00:00" } else { "00:03:00" }, state.uri.replace('&', "&amp;")),
                     _ => String::new(),
                 }
             };
@@ -420,4 +421,75 @@ async fn brief_disconnect_preserves_queue_only_after_fresh_playing_evidence() {
             .count(),
         2
     );
+}
+
+#[tokio::test]
+async fn wire_queue_uses_local_audio_duration_when_renderer_reports_zero() {
+    let f = Fixture::new().await;
+    let samples = 8000u32 * 180;
+    let mut wav = b"RIFF".to_vec();
+    wav.extend_from_slice(&(36 + samples).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&8000u32.to_le_bytes());
+    wav.extend_from_slice(&8000u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&8u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&samples.to_le_bytes());
+    wav.extend(vec![128; samples as usize]);
+    let file = f._directory.path().join("actual-duration.wav");
+    std::fs::write(&file, wav).unwrap();
+    f.engine.import(vec![file]).await.unwrap();
+    let tracks = f.engine.snapshot().await.unwrap().tracks;
+    let song = &tracks[1].id;
+    f.engine
+        .control("mode", serde_json::json!("repeat-all"))
+        .await
+        .unwrap();
+    f.engine.play(song).await.unwrap();
+    assert_eq!(f.engine.snapshot().await.unwrap().duration, 180);
+    {
+        let mut wire = f.wire.state.lock().unwrap();
+        wire.zero_duration = true;
+        wire.position = 179;
+    }
+    f.engine.poll().await;
+    f.wire.state.lock().unwrap().transport = "STOPPED".into();
+    f.engine.poll().await;
+    assert_eq!(
+        f.engine
+            .snapshot()
+            .await
+            .unwrap()
+            .current_track_id
+            .as_deref(),
+        Some(f.track.as_str())
+    );
+    assert!(f
+        .wire
+        .state
+        .lock()
+        .unwrap()
+        .actions
+        .iter()
+        .any(|a| a == "SetPlayMode"));
+    f.engine.poll().await;
+    let selected = f
+        .engine
+        .snapshot()
+        .await
+        .unwrap()
+        .selected_device_id
+        .unwrap();
+    assert!(f.engine.remote_play("old-device", song).await.is_err());
+    let all = f
+        .engine
+        .remote_control(&selected, "play-all")
+        .await
+        .unwrap();
+    assert_eq!(all.queue_mode, "sequential");
+    assert_eq!(all.current_track_id.as_deref(), Some(f.track.as_str()));
 }

@@ -1,10 +1,10 @@
-//! Opt-in LAN import with remembered phone pairing. No account or playback API.
+//! Opt-in, paired LAN import and control of the explicitly selected speaker.
 use crate::{
     bilibili::{BatchSelection, Downloader},
-    engine::Engine,
+    engine::{Engine, Snapshot},
 };
 use axum::{
-    extract::{DefaultBodyLimit, Request, State},
+    extract::{DefaultBodyLimit, Query, Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
@@ -257,6 +257,8 @@ async fn start(
         .route("/api/parse", post(parse))
         .route("/api/download", post(download))
         .route("/api/jobs", get(jobs))
+        .route("/api/library", get(library))
+        .route("/api/playback", post(playback))
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state.clone());
@@ -440,3 +442,157 @@ async fn jobs(State(state): State<Arc<Session>>) -> Json<Value> {
 #[cfg(test)]
 #[path = "mobile_tests.rs"]
 mod tests;
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct LibraryQuery {
+    q: String,
+    page: usize,
+}
+fn phone_player(snapshot: &Snapshot) -> Value {
+    let device = snapshot
+        .devices
+        .iter()
+        .find(|d| Some(&d.id) == snapshot.selected_device_id.as_ref());
+    let current = snapshot
+        .tracks
+        .iter()
+        .find(|t| Some(&t.id) == snapshot.current_track_id.as_ref());
+    json!({
+        "device_id": snapshot.selected_device_id,
+        "device_name": device.map(|d| &d.name),
+        "connection": snapshot.device_connection,
+        "current_track_id": snapshot.current_track_id,
+        "title": current.map(|t| &t.title),
+        "transport": snapshot.transport_state,
+        "mode": snapshot.queue_mode,
+    })
+}
+fn phone_library(snapshot: &Snapshot, query: &LibraryQuery) -> Value {
+    let q = query.q.trim().to_lowercase();
+    let tracks: Vec<_> = snapshot
+        .tracks
+        .iter()
+        .filter(|t| t.title.to_lowercase().contains(&q))
+        .collect();
+    let pages = tracks.len().div_ceil(20).max(1);
+    let page = query.page.max(1).min(pages);
+    json!({"player": phone_player(snapshot), "total": tracks.len(), "library_total": snapshot.tracks.len(), "page": page, "pages": pages,
+        "tracks": tracks.iter().skip((page - 1) * 20).take(20).map(|t| json!({"id": t.id, "title": t.title, "format": t.format})).collect::<Vec<_>>()})
+}
+async fn library(
+    State(state): State<Arc<Session>>,
+    Query(query): Query<LibraryQuery>,
+) -> ApiResult {
+    if query.q.chars().count() > 120 {
+        return Err(failure(StatusCode::BAD_REQUEST, "搜索词最多 120 个字。"));
+    }
+    let engine = state
+        .engine
+        .upgrade()
+        .ok_or_else(|| failure(StatusCode::GONE, "电脑应用已退出。"))?;
+    let snapshot = engine.snapshot().await.map_err(|_| {
+        failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "电脑曲库暂时不可用，请重试。",
+        )
+    })?;
+    Ok(Json(phone_library(&snapshot, &query)))
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum QueueMode {
+    Sequential,
+    RepeatAll,
+    RepeatOne,
+}
+impl QueueMode {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Sequential => "sequential",
+            Self::RepeatAll => "repeat-all",
+            Self::RepeatOne => "repeat-one",
+        }
+    }
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum TransportCommand {
+    Pause,
+    Resume,
+    Stop,
+    Next,
+    Previous,
+}
+impl TransportCommand {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pause => "pause",
+            Self::Resume => "resume",
+            Self::Stop => "stop",
+            Self::Next => "next",
+            Self::Previous => "previous",
+        }
+    }
+}
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case", deny_unknown_fields)]
+enum PlaybackRequest {
+    Play {
+        device_id: String,
+        track_id: String,
+    },
+    PlayAll {
+        device_id: String,
+    },
+    Control {
+        device_id: String,
+        command: TransportCommand,
+    },
+    Mode {
+        mode: QueueMode,
+    },
+}
+async fn playback(
+    State(state): State<Arc<Session>>,
+    Json(input): Json<PlaybackRequest>,
+) -> ApiResult {
+    let _operation = state.operation.try_lock().map_err(|_| {
+        failure(
+            StatusCode::TOO_MANY_REQUESTS,
+            "正在处理上一个请求，请稍候。",
+        )
+    })?;
+    let engine = state
+        .engine
+        .upgrade()
+        .ok_or_else(|| failure(StatusCode::GONE, "电脑应用已退出。"))?;
+    // Once accepted, finish a serialized speaker mutation even if the phone
+    // disconnects or reception is paused during SOAP. Dropping an HTTP handler
+    // must not leave the renderer changed and PC state unreconciled.
+    let result = tokio::spawn(async move {
+        match input {
+            PlaybackRequest::Play {
+                device_id,
+                track_id,
+            } => engine.remote_play(&device_id, &track_id).await,
+            PlaybackRequest::PlayAll { device_id } => {
+                engine.remote_control(&device_id, "play-all").await
+            }
+            PlaybackRequest::Control { device_id, command } => {
+                engine.remote_control(&device_id, command.as_str()).await
+            }
+            PlaybackRequest::Mode { mode } => engine.control("mode", json!(mode.as_str())).await,
+        }
+    })
+    .await
+    .map_err(|_| {
+        failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "电脑未能完成操作，请刷新状态后重试。",
+        )
+    })?;
+    // Never expose raw file/network diagnostics or paths to the phone.
+    let snapshot = result.map_err(|_| failure(StatusCode::CONFLICT, "操作未完成，状态已刷新。请确认电脑仍连接所选音响、歌曲仍在曲库中，再重试；详细原因可在电脑查看。"))?;
+    Ok(Json(phone_player(&snapshot)))
+}

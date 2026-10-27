@@ -1,7 +1,7 @@
 //! Local title recognition and the shared key used for spoken song names.
 use lofty::{
     config::{apply_global_options, GlobalOptions, ParseOptions},
-    file::TaggedFileExt,
+    file::{AudioFile, TaggedFileExt},
     probe::Probe,
     tag::Accessor,
 };
@@ -68,6 +68,29 @@ impl Seek for MetadataReader {
         self.file.seek(position)
     }
 }
+/// Read container properties with the same bounded, validated handle as tags.
+pub fn audio_duration(file: File) -> u64 {
+    apply_global_options(
+        GlobalOptions::new()
+            .allocation_limit(1024 * 1024)
+            .use_custom_resolvers(false)
+            .preserve_format_specific_items(false),
+    );
+    let reader = BufReader::new(MetadataReader {
+        file,
+        remaining: 8 * 1024 * 1024,
+        operations: 20_000,
+        started: Instant::now(),
+    });
+    Probe::new(reader)
+        .options(ParseOptions::new().read_tags(false).read_cover_art(false))
+        .guess_file_type()
+        .ok()
+        .and_then(|p| p.read().ok())
+        .map(|audio| audio.properties().duration().as_secs())
+        .unwrap_or(0)
+}
+
 fn tag_title(file: File) -> Option<String> {
     apply_global_options(
         GlobalOptions::new()
@@ -216,6 +239,31 @@ mod tests {
         file.write_all(bytes).unwrap();
         file.rewind().unwrap();
         recognize(file, title, false)
+    }
+
+    #[test]
+    fn duration_reads_pcm_properties_and_rejects_unknown_data() {
+        use std::io::Write;
+        let samples = 8000u32 * 3;
+        let mut wav = b"RIFF".to_vec();
+        wav.extend_from_slice(&(36 + samples).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&samples.to_le_bytes());
+        wav.extend(vec![128; samples as usize]);
+        for (bytes, expected) in [(&wav[..], 3), (b"not audio".as_slice(), 0)] {
+            let mut f = tempfile::tempfile().unwrap();
+            f.write_all(bytes).unwrap();
+            f.rewind().unwrap();
+            assert_eq!(audio_duration(f), expected);
+        }
     }
 
     #[test]
