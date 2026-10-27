@@ -2,7 +2,7 @@
 
 在电脑上选择本地音乐，通过局域网推送到支持 DLNA 的小米 / 小爱音箱。带中文网页界面，支持发现音箱、导入音乐文件夹、上传音乐、播放队列、暂停 / 继续、切歌、进度与音量控制。
 
-Python 3.9 及以上即可运行，全部使用 Python 标准库，无需安装第三方依赖。
+后端需要 Python 3.9 及以上，使用 Python 标准库。网页界面由 React 构建；首次使用和修改前端后，需要 Node.js 22+ 安装依赖并构建静态资源。构建完成后运行 Python 服务，无需额外的前端进程或在线 CDN。
 
 ## 开始使用
 
@@ -11,6 +11,8 @@ Python 3.9 及以上即可运行，全部使用 Python 标准库，无需安装�
 3. 在本项目目录运行：
 
    ```sh
+   npm ci
+   npm run build:ui
    python3 -m xiaomi_dlna
    ```
 
@@ -74,9 +76,17 @@ python3 -m xiaomi_dlna --interface 192.168.1.20 --advertise-host 192.168.1.20
 ## 测试
 
 ```sh
+npm run build:ui
+npm run test:react
 python3 -m unittest discover -s tests -v
 ```
 
 测试包含本地模拟音箱的真实 HTTP / SOAP 交互、音乐库持久化、媒体字节范围、控制访问边界及播放状态切换。测试无需真实音箱，但实机的格式支持、局域网发现和固件行为仍需要在你的音箱上验证。
 
 2026-10-22 验证：45 项 Python 测试全部通过；JavaScript 语法检查及严格 UI 静态审计通过。浏览器已检查导入文件夹、单文件上传、手动设备添加、播放/暂停/继续、搜索分页和键盘切换播放模式。独立 DESIGN 文档 lint 所需的工具包未缓存，受网络限制未运行；这不影响程序启动。
+
+## React 前端开发
+
+界面入口位于 `xiaomi_dlna/static/src/main.jsx`，页面、状态和交互由 `App.jsx` 的 React 组件管理。共享图标、弹窗和格式化函数与桌面 React 页面复用，Python 的 HTTP 控制令牌和媒体访问边界保持不变。不要恢复手工 DOM 页面构建或直接编辑 `dist/` 中的产物。
+
+`npm run build:ui` 会生成 `xiaomi_dlna/static/dist/index.html`、`app.js` 和 `app.css`。Python 服务只提供构建后的文件；源码 HTML 由 Vite 处理，不能直接作为运行页面。前端改动后重新构建并刷新页面即可。

@@ -134,7 +134,7 @@ macOS：打开 DMG 后，先将应用拖到“应用程序”，再启动应用�
 
 ## 开发运行
 
-需要 Node.js 22+、Rust stable 和对应平台的 Tauri 2 构建环境：
+需要 Node.js 22.12+、Rust stable 和对应平台的 Tauri 2 构建环境：
 
 - **Windows 10 / 11**：Microsoft C++ Build Tools（Desktop development with C++、Windows SDK）和 Microsoft Edge WebView2。
 - **macOS 11+**：Xcode / Command Line Tools。Apple Silicon 和 Intel 均有打包目标。
@@ -146,7 +146,15 @@ npm ci
 npm run dev
 ```
 
-界面位于 `frontend/`，无前端构建框架或开发服务器。通过 `core.invoke` 调用 Rust 原生命令；直接用浏览器打开 HTML 不具备控制功能。
+所有界面使用 React 19，由 Vite 构建；不再使用原生 JavaScript 拼接页面或全局 DOM 控制器。
+
+- `frontend/src/`：Tauri 桌面曲库、播放器、账号与导入弹窗，通过 `core.invoke` 调用 Rust 原生命令。
+- `mobile/src/`：手机点歌、配对和视频导入，通过已有的同源 HTTP API 访问电脑。
+- `xiaomi_dlna/static/src/`：保留的 Python 浏览器界面，包含原有上传队列和 HTTP 控制流程。
+
+`npm run dev` 会构建资源并启动 Vite 开发服务器及 Tauri 窗口，桌面 React 修改支持热更新。也可运行 `npm run dev:ui`、`npm run dev:mobile`、`npm run dev:legacy` 分别查看三个前端；桌面控制仍需要 Tauri，另外两个页面需要对应服务 API，单独的开发页面不会模拟成功或提供真实设备数据。
+
+`npm run build:ui` 生成 `dist/desktop/`、`dist/mobile/` 和 `xiaomi_dlna/static/dist/`。手机脚本和样式在 Rust 编译时嵌入；修改后端嵌入的手机页面需要重新构建前端并重新编译 Rust。直接运行 Cargo 前，先执行此命令。Tauri 开发、打包、`npm test`、`npm run test:core` 和 `npm run lint` 会自动准备资源。运行 Python 旧版前也需要先构建。
 
 若本项目存在 `.tools/cargo` 与 `.tools/rustup`，启动脚本会使用项目内 Rust 工具链；否则使用系统 PATH 中的 Rust。
 
@@ -188,6 +196,8 @@ Windows 安装后无需开发工具。首次运行时将电脑与音响连接同
 ```sh
 npm run check:ui
 npm run test:ui
+npm run test:browser
+npm run fmt:ui
 npm run test:core
 npm test
 npm run lint
@@ -215,8 +225,8 @@ npm run fmt -- --check
 ## 代码结构
 
 ```text
-frontend/                 中文桌面界面
-mobile/                   免安装手机发送页面（编译进桌面应用）
+frontend/src/             React 中文桌面界面
+mobile/src/               React 手机点歌页面（构建后编译进桌面应用）
 src-tauri/src/desktop.rs   Tauri 命令、原生选择器、生命周期
 src-tauri/src/engine.rs    状态、播放队列、自动发现与轮询
 src-tauri/src/dlna.rs      SSDP、设备描述、UPnP SOAP
@@ -229,4 +239,6 @@ src-tauri/src/online.rs    有界在线响应、Cookie 范围与网络超时
 src-tauri/tests/           跨模块真实 HTTP 集成测试
 ```
 
-`xiaomi_dlna/` 与 `tests/` 保留之前的 Python 版本供参考，不参与桌面应用运行或打包；[旧版说明](docs/LEGACY_PYTHON.md)仅适用于旧版。两者音乐库独立，桌面版请重新导入原音乐文件。
+`xiaomi_dlna/` 保留之前的 Python 服务与 React 浏览器界面供参考；`tests/` 包含前端及 Python 测试，不参与桌面应用运行或打包；[旧版说明](docs/LEGACY_PYTHON.md)仅适用于旧版。两者音乐库独立，桌面版请重新导入原音乐文件。
+
+前端组件测试使用 Vitest、Testing Library 和真实 DOM，覆盖连接与配对恢复、IME 输入、重复提交、过期响应、曲名草稿、跨页选择和上传取消重试。`npm run test:browser` 使用本机 Chromium（可用 `CHROMIUM_PATH` 指定）或 Playwright 安装的 Chromium；首次使用后者先执行 `npx playwright install chromium`。浏览器测试使用测试数据替代 IPC/HTTP 边界，验证真实生产资源、CSP、键盘、焦点及窄屏布局，不会控制真实音箱。

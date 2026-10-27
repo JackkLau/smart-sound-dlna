@@ -1,44 +1,14 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><title>手机点歌 · 小米音响</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/mobile.css"><script src="/app.js" defer></script></head>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>手机点歌 · 小米音响</title>
+</head>
 <body class="mobile-page">
-  <header class="mobile-heading"><span class="eyebrow">小米音响 · 本地音乐</span><h1>手机点歌</h1><p>选择电脑曲库中的歌曲，由电脑推送到音响。也可以发送 Bilibili 视频，下载音轨到电脑。</p></header>
-  <main>
-    <section id="pair-panel" aria-labelledby="pair-title">
-      <h2 id="pair-title">连接电脑</h2><p id="pair-status" class="field-help" role="status">正在连接电脑…</p>
-      <button disabled id="connection-retry" class="button outline" type="button">重试连接</button>
-    </section>
-    <section id="listen-panel" hidden aria-labelledby="listen-title">
-      <h2 id="listen-title">电脑音乐库</h2>
-      <p id="speaker-status" class="field-help" role="status">正在读取音响状态…</p>
-      <strong id="playing-title">还没有播放音乐</strong>
-      <form id="mode-form" novalidate>
-        <label class="field-label" for="phone-mode">播放模式</label>
-        <select disabled id="phone-mode" class="text-input" aria-describedby="mode-error"><option value="sequential">顺序播放</option><option value="repeat-all">列表循环</option><option value="repeat-one">单曲循环</option></select>
-        <button disabled type="submit" class="button outline">应用播放模式</button>
-        <p id="mode-error" class="field-error" role="alert"></p>
-      </form>
-      <p id="phone-queue-help" class="field-help">顺序按电脑的完整曲库排列，搜索只用于找歌。</p>
-      <div id="phone-transport" class="mobile-transport" aria-label="音响控制"><button disabled id="phone-previous" type="button" class="button outline">上一首</button><button disabled id="phone-toggle" type="button" class="button primary">播放</button><button disabled id="phone-next" type="button" class="button outline">下一首</button><button disabled id="phone-stop" type="button" class="button outline">停止</button></div>
-      <button disabled id="phone-play-all" type="button" class="button outline">播放全部 · 从第一首顺序播放</button>
-      <p id="listen-error" class="field-error" role="alert"></p>
-      <label class="field-label" for="phone-search">搜索曲名</label>
-      <div class="mobile-search"><input id="phone-search" type="search" class="text-input" maxlength="120" placeholder="搜索电脑曲库" autocomplete="off"><button disabled hidden id="phone-clear" type="button" class="button outline">清空</button></div>
-      <p id="library-status" class="field-help" role="status">正在读取曲库…</p>
-      <ul id="phone-tracks" class="mobile-tracks" aria-label="电脑曲库中的音乐"></ul>
-      <div class="mobile-pagination"><button disabled id="phone-page-previous" type="button" class="button outline">上一页</button><span id="phone-page-info">1 / 1</span><button disabled id="phone-page-next" type="button" class="button outline">下一页</button></div>
-      <button disabled id="library-retry" type="button" class="button outline">刷新曲库与音响状态</button>
-      <p class="field-help">先在电脑选择并连接音响。点击歌曲会立即播放，并按已应用的模式继续；电脑应用需保持运行。</p>
-    </section>
-    <section id="send-panel" hidden aria-labelledby="send-title">
-      <div class="mobile-section-heading"><h2 id="send-title">选择视频音轨</h2><span class="field-help">已连接电脑</span></div>
-      <p id="remember-note" class="field-help">收藏此页，或在浏览器菜单选择“添加到主屏幕”。下次直接打开，无需再次扫码；请保持同一 Wi-Fi，并在电脑开启手机接收。</p>
-      <form id="parse-form" novalidate><label class="field-label" for="share-text">视频链接或分享文案</label><textarea class="text-input resize-none" id="share-text" rows="3" maxlength="8192" required placeholder="粘贴 Bilibili 分享内容，支持 b23.tv、BV 号和分 P 链接" aria-describedby="parse-error"></textarea><button class="button primary" type="submit">发送并解析</button><p id="parse-error" class="field-error" role="alert"></p></form>
-      <form id="download-form" hidden novalidate><h3 id="video-title"></h3><p id="video-author" class="field-help"></p><p class="field-help">选择要保存的音轨，每次最多 100 首。多 P 视频默认选中链接指定的那一 P。</p><fieldset id="parts"><legend class="field-label">下载哪些音轨</legend></fieldset><p id="selected-count" class="field-help" role="status"></p><button class="button primary" type="submit">在电脑下载选中音轨</button><p id="download-error" class="field-error" role="alert"></p><p id="download-summary" role="status"></p></form>
-    </section>
-    <section id="jobs-panel" hidden aria-labelledby="jobs-title"><h2 id="jobs-title">电脑下载进度</h2><p class="field-help">关闭手机页面后，电脑会继续下载。取消或重试请在电脑操作。</p><ul id="jobs" class="mobile-jobs"></ul></section>
-    <p id="connection-error" class="field-error" role="alert"></p>
-    <p class="field-help mobile-note">仅下载你有权保存的内容。请保持电脑应用运行；需要账号权限的视频，请在电脑登录 Bilibili。此入口使用本地 HTTP，请仅在可信的家庭 Wi-Fi 使用。</p>
-  </main>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
   <noscript>请在浏览器启用 JavaScript 后重试。</noscript>
-</body></html>
+</body>
+</html>

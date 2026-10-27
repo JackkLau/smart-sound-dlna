@@ -215,7 +215,9 @@ class ServerIntegrationTests(unittest.TestCase):
         assets = re.findall(rb'(?:href|src)="([^"#]+\.(?:css|js))"', body)
         self.assertGreaterEqual(len(assets), 2)
         for asset in assets:
-            asset_status, _, asset_body = self.request("GET", asset.decode())
+            # Vite emits relative asset URLs; request their document-relative path.
+            asset_path = urllib.parse.urljoin("/", asset.decode())
+            asset_status, _, asset_body = self.request("GET", asset_path)
             self.assertEqual(asset_status, 200, asset)
             self.assertTrue(asset_body)
         for headers in ({}, {"X-Control-Token": "wrong"},
@@ -228,6 +230,19 @@ class ServerIntegrationTests(unittest.TestCase):
         status, _, _ = self.request("GET", "/api/config",
                                     headers={"Host": "localhost:%d" % self.port})
         self.assertEqual(status, 200)
+
+    def test_react_bundle_assets_and_legacy_aliases(self):
+        status, _, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'id="root"', body)
+        self.assertNotIn(b"/src/main.jsx", body)
+        for path, mime in (("/app.js", "text/javascript"), ("/app.css", "text/css"),
+                           ("/static/app.js", "text/javascript"), ("/static/style.css", "text/css")):
+            asset_status, headers, content = self.request("GET", path)
+            self.assertEqual(asset_status, 200, path)
+            self.assertTrue(headers["Content-Type"].startswith(mime), path)
+            self.assertTrue(content, path)
+        self.assertEqual(self.request("GET", "/src/main.jsx")[0], 404)
 
     def test_scan_is_recursive_deduplicated_and_does_not_follow_symlinks(self):
         music = self.root / "music"

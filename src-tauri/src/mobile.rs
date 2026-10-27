@@ -224,32 +224,23 @@ async fn start(
     let router = Router::new()
         .route(
             "/",
-            get(|| async { Html(include_str!("../../mobile/index.html")) }),
+            get(|| async { Html(include_str!("../../dist/mobile/index.html")) }),
         )
         .route(
             "/app.js",
             get(|| async {
                 (
                     [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-                    include_str!("../../mobile/app.js"),
+                    include_str!("../../dist/mobile/app.js"),
                 )
             }),
         )
         .route(
-            "/style.css",
+            "/app.css",
             get(|| async {
                 (
                     [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-                    include_str!("../../frontend/style.css"),
-                )
-            }),
-        )
-        .route(
-            "/mobile.css",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-                    include_str!("../../mobile/mobile.css"),
+                    include_str!("../../dist/mobile/app.css"),
                 )
             }),
         )

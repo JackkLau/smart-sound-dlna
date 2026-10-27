@@ -202,6 +202,11 @@ input[type="range"] { width: 100%; height: 18px; margin: 0; accent-color: var(--
 .toast { position: fixed; z-index: 30; left: 50%; bottom: 133px; transform: translateX(-50%); max-width: min(500px, calc(100vw - 36px)); padding: 11px 19px; border: 1px solid var(--color-line); border-radius: 10px; box-shadow: 0 5px 24px #24272d14; color: var(--color-ink); background: var(--color-surface); font-size: 12px; overflow-wrap: anywhere; }
 dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 29px; border: 1px solid var(--color-line); border-radius: var(--radius-dialog); color: var(--color-ink); box-shadow: 0 22px 80px #24272d30; overflow: auto; }
 dialog::backdrop { background: #24272d55; backdrop-filter: blur(3px); }
+dialog.feature-dialog { padding: 0; overflow: hidden; }
+dialog.feature-dialog[open] { display: flex; flex-direction: column; }
+dialog.feature-dialog > .dialog-heading { padding: 24px 29px 0; flex-shrink: 0; }
+dialog.feature-dialog > .dialog-body { padding: 0 29px 24px; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; }
+dialog.feature-dialog .dialog-body :focus-visible { scroll-margin: 12px; }
 .dialog-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
 .dialog-heading h2 { font-family: var(--font-display); font-size: 23px; font-weight: 600; margin-top: 6px; }
 .dialog-description { font-size: 12px; color: var(--color-muted); margin: 19px 0 23px; line-height: 1.9; }

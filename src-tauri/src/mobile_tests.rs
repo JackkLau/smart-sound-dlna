@@ -167,7 +167,23 @@ async fn lan_boundary_requires_pairing_and_revokes_access() {
     );
     let page = client.get(f.url("/")).send().await.unwrap();
     assert_eq!(page.headers()["cache-control"], "no-store");
-    assert!(page.text().await.unwrap().contains("手机点歌"));
+    let html = page.text().await.unwrap();
+    assert!(html.contains("手机点歌"));
+    assert!(html.contains("type=\"module\""));
+    assert!(html.contains("./app.js"));
+    assert!(html.contains("./app.css"));
+    assert!(!html.contains("/src/"));
+    for (path, mime) in [("/app.js", "text/javascript"), ("/app.css", "text/css")] {
+        let asset = client.get(f.url(path)).send().await.unwrap();
+        assert_eq!(asset.status(), StatusCode::OK);
+        assert!(asset.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with(mime));
+        assert_eq!(asset.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(asset.headers()["cache-control"], "no-store");
+        assert!(!asset.text().await.unwrap().is_empty());
+    }
     let token = f.pair().await;
     assert_eq!(
         client
