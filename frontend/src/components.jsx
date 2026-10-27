@@ -1,5 +1,12 @@
 import { Children, createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
 import * as SelectPrimitive from '@radix-ui/react-select';
+import { setNonce } from 'get-nonce';
+
+// Tauri gives this bundled style element a fresh CSP nonce for each page load.
+// Share it with Radix's viewport and scroll-lock stylesheet, without allowing
+// arbitrary inline styles in the application's security policy.
+const styleNonce = document.getElementById('ui-style-nonce')?.nonce || undefined;
+if (styleNonce) setNonce(styleNonce);
 
 const SelectContainer = createContext(null);
 
@@ -31,7 +38,7 @@ export function Select({ children, value, onChange, disabled, className = '', ..
           <SelectPrimitive.ScrollUpButton className="select-scroll">
             ⌃
           </SelectPrimitive.ScrollUpButton>
-          <SelectPrimitive.Viewport>
+          <SelectPrimitive.Viewport nonce={styleNonce}>
             {options.map((option) => (
               <SelectPrimitive.Item
                 className="select-option"

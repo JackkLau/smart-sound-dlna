@@ -7,7 +7,19 @@ export default defineConfig(({ mode }) => {
   return {
     root: resolve(roots[surface]),
     base: './',
-    plugins: [react()],
+    plugins: [
+      react(),
+      {
+        name: 'desktop-style-nonce',
+        transformIndexHtml: {
+          order: 'post',
+          handler: () =>
+            surface === 'desktop'
+              ? [{ tag: 'style', attrs: { id: 'ui-style-nonce' }, children: '', injectTo: 'head' }]
+              : [],
+        },
+      },
+    ],
     server: {
       host: '127.0.0.1',
       port: surface === 'desktop' ? 1420 : surface === 'mobile' ? 1421 : 1422,

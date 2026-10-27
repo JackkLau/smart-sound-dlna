@@ -43,6 +43,7 @@
   },
   "dependencies": {
     "@radix-ui/react-select": "^2.4.1",
+    "get-nonce": "^1.0.1",
     "qrcode-generator": "^1.4.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

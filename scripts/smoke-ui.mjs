@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { chromium, expect } from '@playwright/test';
 
 const roots = { desktop: 'dist/desktop', mobile: 'dist/mobile', legacy: 'xiaomi_dlna/static/dist' };
@@ -21,10 +22,23 @@ const server = createServer(async (request, response) => {
   }
   try {
     const file = asset || 'index.html';
-    const body = await readFile(resolve(roots[surface], file));
+    let body = await readFile(resolve(roots[surface], file));
+    let policy = csp;
+    if (surface === 'desktop' && file === 'index.html') {
+      // Mirror Tauri's per-response nonce injection for bundled style elements.
+      const nonce = randomBytes(24).toString('base64');
+      const html = body.toString();
+      if (!html.includes('<style id="ui-style-nonce">'))
+        throw new Error('Desktop HTML is missing the CSP style nonce carrier');
+      body = html.replace(
+        '<style id="ui-style-nonce">',
+        `<style id="ui-style-nonce" nonce="${nonce}">`,
+      );
+      policy = csp.replace("style-src 'self'", `style-src 'self' 'nonce-${nonce}'`);
+    }
     response.writeHead(200, {
       'Content-Type': `${file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html'}; charset=utf-8`,
-      'Content-Security-Policy': csp,
+      'Content-Security-Policy': policy,
     });
     response.end(body);
   } catch (error) {
@@ -134,6 +148,15 @@ try {
   await page.getByRole('button', { name: '清空搜索', exact: true }).first().click();
   await expect(page.getByLabel('搜索音乐', { exact: true })).toBeFocused();
   await page.getByRole('combobox', { name: '播放顺序', exact: true }).click();
+  await expect(page.getByRole('option', { name: '列表循环', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => getComputedStyle(document.body).overflow)).toBe('hidden');
+  expect(
+    await page.evaluate(() => {
+      const nonce = document.getElementById('ui-style-nonce').nonce;
+      const styles = [...document.querySelectorAll('style')];
+      return Boolean(nonce) && styles.length >= 3 && styles.every((style) => style.nonce === nonce);
+    }),
+  ).toBe(true);
   await page.getByRole('option', { name: '列表循环', exact: true }).click();
   await expect(page.getByRole('combobox', { name: '播放顺序', exact: true })).toHaveText(
     '列表循环',
