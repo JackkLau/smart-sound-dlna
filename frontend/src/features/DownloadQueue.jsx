@@ -5,6 +5,7 @@ import { ErrorMessage } from './Form.jsx';
 const phases = {
   queued: '等待下载',
   resolving: '正在获取音轨',
+  extracting: '正在分离音轨',
   downloading: '正在下载',
   cancelling: '正在取消',
   importing: '正在加入曲库',
@@ -32,7 +33,7 @@ export default function DownloadQueue({ controller }) {
                   ? ` · ${formatSize(job.downloaded)}${job.total ? ` / ${formatSize(job.total)}` : ''}`
                   : ''}
               </p>
-              {['downloading', 'resolving', 'importing'].includes(job.phase) && (
+              {['downloading', 'resolving', 'extracting', 'importing'].includes(job.phase) && (
                 <progress
                   aria-label={`${job.title}：${phases[job.phase]}`}
                   {...(job.total && job.phase === 'downloading'

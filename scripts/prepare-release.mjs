@@ -38,7 +38,7 @@ export async function prepareRelease(input, output, { version, sha, runUrl }) {
   await mkdir(output, { recursive: true });
   for (const item of packages) await writeFile(path.join(output, item.name), item.bytes, { flag: 'wx' });
   await writeFile(path.join(output, 'SHA256SUMS'), packages.map(item => `${item.sha256}  ${item.name}\n`).join(''), { flag: 'wx' });
-  await writeFile(path.join(output, 'release-notes.md'), `小米音乐投送 ${version}\n\n- 修复小爱音箱播完仍报告 PLAYING、进度回到开头时重复当前曲的问题；顺序播放自动进入下一首，末曲结束停止。\n- 保持手动回拖、暂停和断线恢复不误切歌；手机点歌与播放模式沿用电脑统一队列。\n- 保留 macOS 完整临时签名与实际 DMG 校验。\n- Windows x64、macOS Apple Silicon 与 Intel 安装包均经过原生测试和构建。\n\n源码：${sha}\n构建记录：${runUrl}\n\nmacOS 使用完整的临时签名（Ad Hoc），尚未通过 Apple 公证；Windows 暂无发行证书签名。Mac 首次安装请先拖到“应用程序”；如提示无法验证开发者，可在“系统设置 → 隐私与安全性”检查并选择“仍要打开”。临时签名不等于 Apple 认证。\n`, { flag: 'wx' });
+  await writeFile(path.join(output, 'release-notes.md'), `小米音乐投送 ${version}\n\n- 更新输入框、下拉菜单、音量与进度控件，保留紧凑布局与固定弹窗标题。\n- 视频导入支持在哔哩哔哩与抖音之间选择，链接可一键清除；保留哔哩哔哩多 P 和收藏夹导入。\n- 抖音公开视频在本地提取 AAC / HE-AAC 音轨为 M4A，支持预览、取消、重试及自动曲名识别。\n- 保留 macOS 完整临时签名与实际 DMG 校验。\n- Windows x64、macOS Apple Silicon 与 Intel 安装包均经过原生测试和构建。\n\n源码：${sha}\n构建记录：${runUrl}\n\nmacOS 使用完整的临时签名（Ad Hoc），尚未通过 Apple 公证；Windows 暂无发行证书签名。Mac 首次安装请先拖到“应用程序”；如提示无法验证开发者，可在“系统设置 → 隐私与安全性”检查并选择“仍要打开”。临时签名不等于 Apple 认证。\n`, { flag: 'wx' });
   return packages.map(({ name, sha256 }) => ({ name, sha256 }));
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Dialog } from '../components.jsx';
+import { Dialog, Select, ClearableInput } from '../components.jsx';
 import { formatTime } from '../utils.js';
 import BilibiliSelection from '../../import-selection.js';
 import { Form, ErrorMessage } from './Form.jsx';
@@ -8,6 +8,7 @@ import Account from './Account.jsx';
 function PartPicker({ record, onChange, disabled }) {
   const all = useRef(null);
   const selected = record.selected;
+  const single = record.preview.provider === 'douyin';
   useEffect(() => {
     if (all.current)
       all.current.indeterminate = selected.size > 0 && selected.size < record.preview.parts.length;
@@ -15,7 +16,7 @@ function PartPicker({ record, onChange, disabled }) {
   return (
     <fieldset className="part-picker" disabled={disabled}>
       <legend className="field-label">选择要保存的音轨</legend>
-      <label className="part-choice part-all">
+      <label className="part-choice part-all" hidden={single}>
         <input
           ref={all}
           type="checkbox"
@@ -33,7 +34,7 @@ function PartPicker({ record, onChange, disabled }) {
               onChange={(event) => onChange(part.cid, event.target.checked)}
             />
             <span>
-              P{part.page} · {part.title} · {formatTime(part.duration)}
+              {single ? '视频原声' : `P${part.page}`} · {part.title} · {formatTime(part.duration)}
             </span>
           </label>
         ))}
@@ -48,6 +49,7 @@ export default function BilibiliPanel({ open, onClose, controller }) {
     video: new BilibiliSelection(),
     favorite: new BilibiliSelection(),
   });
+  const [platform, setPlatform] = useState('bilibili');
   const [source, setSource] = useState('video');
   const [url, setUrl] = useState('');
   const [favoriteUrl, setFavoriteUrl] = useState('');
@@ -102,7 +104,7 @@ export default function BilibiliPanel({ open, onClose, controller }) {
   return (
     <Dialog
       id="bilibili-dialog"
-      title="从 Bilibili 导入音频"
+      title="从视频导入音频"
       eyebrow="扩充你的曲库"
       description="bilibili-description"
       open={open}
@@ -112,11 +114,42 @@ export default function BilibiliPanel({ open, onClose, controller }) {
     >
       <div className="dialog-body">
         <p id="bilibili-description" className="dialog-description">
-          从视频或收藏夹选择音轨，保存为 M4A 并加入本地曲库。支持单 P 和多
-          P；请仅下载你有权保存的内容。
+          选择视频平台，解析后将音频保存到本地曲库。请仅下载你有权保存的内容。
         </p>
         <div id="import-area">
-          <fieldset className="source-choice" disabled={disabled}>
+          <fieldset className="platform-choice" disabled={disabled}>
+            <legend className="field-label">视频平台</legend>
+            <div className="platform-options">
+              {[
+                ['bilibili', '哔哩哔哩', '视频 · 多 P · 收藏夹'],
+                ['douyin', '抖音', '视频链接 · 分享短链接'],
+              ].map(([value, label, help]) => (
+                <label key={value} className={platform === value ? 'is-selected' : ''}>
+                  <input
+                    type="radio"
+                    name="video-platform"
+                    value={value}
+                    checked={platform === value}
+                    onChange={() => {
+                      setPlatform(value);
+                      setSource('video');
+                      setUrl('');
+                      setReport(null);
+                      stores.current.video.clear();
+                      clearError('bilibili-form');
+                      clearError('download-form');
+                      clearError('selection');
+                    }}
+                  />
+                  <span>
+                    <strong>{label}</strong>
+                    <small>{help}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <fieldset className="source-choice" disabled={disabled} hidden={platform !== 'bilibili'}>
             <legend className="field-label">导入来源</legend>
             {[
               ['video', '视频链接'],
@@ -146,37 +179,68 @@ export default function BilibiliPanel({ open, onClose, controller }) {
                 run(
                   'bilibili-form',
                   async () => {
-                    if (!url.trim()) throw new Error('请先粘贴视频链接或 BV 号。');
+                    if (!url.trim())
+                      throw new Error(
+                        platform === 'bilibili'
+                          ? '请先粘贴视频链接或 BV 号。'
+                          : '请先粘贴抖音视频链接或分享内容。',
+                      );
                     stores.current.video.clear();
                     setReport(null);
                     rerender((value) => value + 1);
-                    const preview = await invoke('parse_bilibili', {
-                      url: url.trim(),
-                    });
+                    const preview = await invoke(
+                      platform === 'bilibili' ? 'parse_bilibili' : 'parse_video',
+                      {
+                        url: url.trim(),
+                        ...(platform === 'douyin' ? { platform } : {}),
+                      },
+                    );
                     stores.current.video.register(preview, true);
                     rerender((value) => value + 1);
-                    announce(`已解析 ${preview.parts.length} 个分 P`);
+                    announce(
+                      platform === 'douyin'
+                        ? '已解析抖音视频，可下载音轨'
+                        : `已解析 ${preview.parts.length} 个分 P`,
+                    );
                   },
                   urlField,
                 )
               }
             >
               <label className="field-label" htmlFor="bilibili-url">
-                视频链接或 BV 号
+                {platform === 'bilibili' ? '视频链接或 BV 号' : '抖音链接或分享内容'}
               </label>
               <div className="inline-field">
-                <input
+                <ClearableInput
                   id="bilibili-url"
                   data-autofocus={source === 'video' ? true : undefined}
-                  ref={urlField}
+                  inputRef={urlField}
                   className="text-input"
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder="https://www.bilibili.com/video/BV…"
-                  maxLength={2048}
+                  placeholder={
+                    platform === 'bilibili'
+                      ? 'https://www.bilibili.com/video/BV…'
+                      : '粘贴抖音分享内容或 https://v.douyin.com/…'
+                  }
+                  maxLength={8192}
                   disabled={disabled}
                   value={url}
-                  onChange={(event) => setUrl(event.target.value)}
+                  onClear={() => {
+                    setUrl('');
+                    stores.current.video.clear();
+                    setReport(null);
+                    clearError('bilibili-form');
+                    clearError('download-form');
+                    clearError('selection');
+                  }}
+                  onChange={(event) => {
+                    setUrl(event.target.value);
+                    stores.current.video.clear();
+                    setReport(null);
+                    clearError('bilibili-form');
+                    clearError('download-form');
+                  }}
                   aria-invalid={Boolean(errors['bilibili-form'])}
                   aria-describedby="bilibili-help bilibili-form-error"
                 />
@@ -190,16 +254,23 @@ export default function BilibiliPanel({ open, onClose, controller }) {
                 </button>
               </div>
               <p id="bilibili-help" className="field-help">
-                支持普通视频、分 P 链接和 b23.tv 短链接。
+                {platform === 'bilibili'
+                  ? '支持普通视频、分 P 链接和 b23.tv 短链接。'
+                  : '支持公开单视频；在电脑本地分离音频。暂不支持图集、直播和需登录的内容。'}
               </p>
+              {platform === 'douyin' && pending === 'bilibili-form' && (
+                <p className="field-help" role="status">
+                  正在读取抖音视频；如出现官方解析窗口，请等待加载，成功后会自动关闭。关闭解析窗口可取消。
+                </p>
+              )}
               <ErrorMessage id="bilibili-form-error">{errors['bilibili-form']}</ErrorMessage>
             </Form>
             {video && (
               <div id="video-preview" className="preview-panel">
                 <h3>{video.preview.title}</h3>
                 <p className="field-help">
-                  {video.preview.author} · {video.preview.parts.length} 个分 P ·{' '}
-                  {video.preview.bvid}
+                  {video.preview.author} ·{' '}
+                  {platform === 'bilibili' ? `${video.preview.parts.length} 个分 P` : '抖音视频'}
                 </p>
                 {picker(video, 'video')}
               </div>
@@ -225,10 +296,10 @@ export default function BilibiliPanel({ open, onClose, controller }) {
                 收藏夹链接或 ID
               </label>
               <div className="inline-field">
-                <input
+                <ClearableInput
                   id="favorite-url"
                   data-autofocus={source === 'favorite' ? true : undefined}
-                  ref={favoriteField}
+                  inputRef={favoriteField}
                   className="text-input"
                   autoComplete="off"
                   spellCheck={false}
@@ -237,6 +308,16 @@ export default function BilibiliPanel({ open, onClose, controller }) {
                   disabled={disabled}
                   value={favoriteUrl}
                   onChange={(event) => setFavoriteUrl(event.target.value)}
+                  clearLabel="清除收藏夹链接"
+                  onClear={() => {
+                    setFavoriteUrl('');
+                    setPage(null);
+                    stores.current.favorite.clear();
+                    setReport(null);
+                    clearError('favorite-form');
+                    clearError('download-form');
+                    clearError('selection');
+                  }}
                   aria-invalid={Boolean(errors['favorite-form'])}
                   aria-describedby="favorite-help favorite-form-error"
                 />
@@ -280,7 +361,7 @@ export default function BilibiliPanel({ open, onClose, controller }) {
                     我的收藏夹
                   </label>
                   <div className="inline-field">
-                    <select
+                    <Select
                       id="my-folders"
                       className="text-input"
                       value={folderId}
@@ -292,7 +373,7 @@ export default function BilibiliPanel({ open, onClose, controller }) {
                           {folder.title} · {folder.total} 个视频
                         </option>
                       ))}
-                    </select>
+                    </Select>
                     <button
                       id="favorite-open-folder"
                       type="button"
@@ -434,7 +515,10 @@ export default function BilibiliPanel({ open, onClose, controller }) {
                 </button>
               </div>
               <p className="field-help">
-                保留原始 AAC 音轨，不下载画面。已在曲库或队列中的音轨会跳过。
+                {platform === 'bilibili'
+                  ? '保留原始 AAC 音轨，不下载画面。'
+                  : '临时下载视频，提取原始 AAC 音轨后只保留 M4A 音频，不重新压缩。'}
+                已在曲库或队列中的音轨会跳过。
               </p>
               <ErrorMessage id="download-form-error">{selectionError}</ErrorMessage>
               {report && (
@@ -471,11 +555,15 @@ export default function BilibiliPanel({ open, onClose, controller }) {
           )}
         </div>
         <details className="feature-details">
-          <summary>账号与保存位置</summary>
-          <p className="field-help">
-            公开视频可直接解析。需要登录的视频可在官方页面登录；登录状态由系统安全保存，重启后自动验证并恢复，退出登录会清除。
-          </p>
-          <Account provider="bilibili" controller={controller} />
+          <summary>{platform === 'bilibili' ? '账号与保存位置' : '保存位置'}</summary>
+          {platform === 'bilibili' && (
+            <>
+              <p className="field-help">
+                公开视频可直接解析。需要登录的视频可在官方页面登录；登录状态由系统安全保存，重启后自动验证并恢复，退出登录会清除。
+              </p>
+              <Account provider="bilibili" controller={controller} />
+            </>
+          )}
           <p className="field-label">保存位置</p>
           <p className="field-help path-copy">{features.downloads?.directory}</p>
         </details>

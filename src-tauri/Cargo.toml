@@ -1,6 +1,6 @@
 [package]
 name = "xiaomi-dlna-desktop"
-version = "0.8.1"
+version = "0.9.0"
 edition = "2021"
 rust-version = "1.90"
 description = "Local music casting for Xiaomi DLNA speakers"
@@ -47,6 +47,7 @@ base64 = "0.22"
 ring = "0.17"
 tempfile = "3"
 lofty = "0.25.4"
+mp4 = "0.14"
 keyring = { version = "=3.6.3", optional = true, features = ["apple-native", "windows-native"] }
 
 [target.'cfg(unix)'.dependencies]
@@ -54,3 +55,7 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+[[example]]
+name = "douyin_smoke"
+required-features = ["desktop"]

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Icon } from './components.jsx';
+import { Icon, Select } from './components.jsx';
 import { formatTime } from './utils.js';
 
 function Range({ id, value, max, disabled, onCommit, time = false }) {
@@ -34,6 +34,9 @@ function Range({ id, value, max, disabled, onCommit, time = false }) {
       <input
         id={id}
         type="range"
+        style={{
+          '--range-fill': `${Math.min(100, Math.max(0, (draft / Math.max(1, max)) * 100))}%`,
+        }}
         min="0"
         max={Math.max(1, max)}
         step="1"
@@ -190,7 +193,7 @@ export default function Player({ state, ready, available, busy, reason, control,
         <label className="sr-only" htmlFor="mode">
           播放顺序
         </label>
-        <select
+        <Select
           id="mode"
           aria-label="播放顺序"
           value={state.queue_mode || 'sequential'}
@@ -200,7 +203,7 @@ export default function Player({ state, ready, available, busy, reason, control,
           <option value="sequential">顺序播放</option>
           <option value="repeat-all">列表循环</option>
           <option value="repeat-one">单曲循环</option>
-        </select>
+        </Select>
         <div className="volume-control">
           <Icon name="volume" />
           <Range

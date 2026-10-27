@@ -481,8 +481,12 @@ it('voice binding uses the selected cloud source and current desktop target only
   await ui.ready();
   expect(ui.invoke.mock.calls.filter(([command]) => command === 'enable_voice')).toHaveLength(0);
   const source = screen.getByLabelText('听取哪台小爱的指令');
-  expect(source.value).toBe('cloud-one');
-  fireEvent.change(source, { target: { value: 'cloud-two' } });
+  expect(source).toHaveTextContent('客厅');
+  await act(async () => {
+    fireEvent.keyDown(source, { key: 'ArrowDown' });
+    await vi.advanceTimersByTimeAsync(20);
+  });
+  fireEvent.click(screen.getByRole('option', { name: /卧室/ }));
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: '开始接收指令' }));
   });
@@ -490,4 +494,72 @@ it('voice binding uses the selected cloud source and current desktop target only
     sourceId: 'cloud-two',
     targetId: 'speaker',
   });
+});
+
+it('Douyin platform parses through the native provider and clearing removes the old preview', async () => {
+  const ui = setup({
+    panel: 'bilibili',
+    operation: async (command) =>
+      command === 'parse_video'
+        ? {
+            id: 'dy-preview',
+            provider: 'douyin',
+            bvid: '7518247213001592121',
+            title: '依然爱你',
+            author: '测试作者',
+            selected_page: 1,
+            parts: [{ cid: 1, page: 1, title: '依然爱你', duration: 330 }],
+          }
+        : undefined,
+  });
+  await ui.ready();
+  fireEvent.click(screen.getByRole('radio', { name: /抖音/ }));
+  expect(document.querySelector('.source-choice')).not.toBeVisible();
+  const input = screen.getByLabelText('抖音链接或分享内容');
+  fireEvent.change(input, {
+    target: { value: 'https://www.douyin.com/video/7518247213001592121' },
+  });
+  await act(async () => fireEvent.submit(document.querySelector('#bilibili-form')));
+  expect(ui.invoke).toHaveBeenCalledWith('parse_video', {
+    platform: 'douyin',
+    url: 'https://www.douyin.com/video/7518247213001592121',
+  });
+  expect(screen.getByRole('heading', { name: '依然爱你' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: '清除链接', exact: true }));
+  expect(input).toHaveValue('');
+  expect(input).toHaveFocus();
+  expect(screen.queryByRole('heading', { name: '依然爱你' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '下载选中音轨' })).toBeNull();
+  fireEvent.click(screen.getByRole('radio', { name: /哔哩哔哩/ }));
+  expect(screen.getByLabelText('视频链接或 BV 号')).toHaveValue('');
+});
+
+it('changing a video link invalidates its preview and a pending parse cannot be cleared or switched', async () => {
+  let resolve;
+  const ui = setup({
+    panel: 'bilibili',
+    operation: () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  });
+  await ui.ready();
+  const input = screen.getByLabelText('视频链接或 BV 号');
+  fireEvent.change(input, { target: { value: 'BV1sVtw6JEeq' } });
+  fireEvent.submit(document.querySelector('#bilibili-form'));
+  expect(screen.getByRole('button', { name: '清除链接', exact: true })).toBeDisabled();
+  expect(screen.getByRole('radio', { name: /抖音/ })).toBeDisabled();
+  await act(async () =>
+    resolve({
+      id: 'bili-preview',
+      bvid: 'BV1sVtw6JEeq',
+      title: '原视频',
+      author: '作者',
+      selected_page: 1,
+      parts: [{ cid: 10, page: 1, title: '原视频', duration: 60 }],
+    }),
+  );
+  fireEvent.change(input, { target: { value: 'BV1DWLJzaEDv' } });
+  expect(screen.queryByRole('heading', { name: '原视频' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '下载选中音轨' })).toBeNull();
 });

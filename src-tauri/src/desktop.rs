@@ -203,6 +203,7 @@ pub fn run() {
         set_mobile_receiver,
         forget_mobile_pairing,
         parse_bilibili,
+        parse_video,
         download_bilibili,
         list_bilibili_folders,
         read_bilibili_favorite,
@@ -264,7 +265,7 @@ pub fn run() {
             }
             handler(invoke)
         })
-        .build(tauri::generate_context!())
+        .build(crate::desktop_context())
         .expect("无法启动小米音乐投送");
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
@@ -329,6 +330,34 @@ async fn get_features(state: State<'_, AppState>) -> Result<Features, String> {
         selected_device_id: snapshot.selected_device_id,
         selected_device_name: name,
     })
+}
+#[tauri::command]
+async fn parse_video(
+    url: String,
+    platform: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<crate::bilibili::Preview, String> {
+    match platform.as_str() {
+        "bilibili" => {
+            state
+                .engine
+                .downloads
+                .parse(&crate::bilibili::shared_video_input(&url)?)
+                .await
+        }
+        "douyin" => {
+            let id = crate::douyin::resolve_input(&url).await?;
+            let video = match crate::douyin::fetch(&id).await {
+                Ok(video) => video,
+                Err(_) => {
+                    crate::douyin_webview::read(&app, &id, state.engine.cancellation()).await?
+                }
+            };
+            state.engine.downloads.register_douyin(video).await
+        }
+        _ => Err("请选择支持的视频平台。".into()),
+    }
 }
 #[tauri::command]
 async fn parse_bilibili(

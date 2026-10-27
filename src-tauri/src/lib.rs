@@ -1,5 +1,8 @@
 pub mod bilibili;
 pub mod dlna;
+pub mod douyin;
+#[cfg(feature = "desktop")]
+mod douyin_webview;
 pub mod engine;
 pub mod library;
 pub mod media;
@@ -21,3 +24,9 @@ mod session_cache;
 mod xiaomi_login;
 #[cfg(feature = "desktop")]
 pub use desktop::run;
+
+#[cfg(feature = "desktop")]
+#[doc(hidden)]
+pub fn desktop_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}

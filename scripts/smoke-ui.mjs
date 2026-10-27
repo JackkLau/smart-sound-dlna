@@ -133,10 +133,11 @@ try {
   await expect(page.locator('#empty-title')).toHaveText('没有找到这首歌');
   await page.getByRole('button', { name: '清空搜索', exact: true }).first().click();
   await expect(page.getByLabel('搜索音乐', { exact: true })).toBeFocused();
-  await page.getByLabel('播放顺序', { exact: true }).focus();
-  await page.keyboard.press('ArrowDown');
-  await page.keyboard.press('Enter');
-  await expect(page.getByLabel('播放顺序', { exact: true })).toHaveValue('repeat-all');
+  await page.getByRole('combobox', { name: '播放顺序', exact: true }).click();
+  await page.getByRole('option', { name: '列表循环', exact: true }).click();
+  await expect(page.getByRole('combobox', { name: '播放顺序', exact: true })).toHaveText(
+    '列表循环',
+  );
   await page.screenshot({ path: 'test-results/react/desktop.png', fullPage: true });
   await page.getByRole('button', { name: '通过设备地址添加' }).click();
   await page.getByRole('button', { name: '添加音响', exact: true }).click();

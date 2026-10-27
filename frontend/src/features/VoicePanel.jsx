@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Dialog } from '../components.jsx';
+import { Dialog, Select } from '../components.jsx';
 import { Form, ErrorMessage } from './Form.jsx';
 import Account from './Account.jsx';
 import { emptyFeatures } from './useFeatureController.js';
@@ -57,7 +57,7 @@ export default function VoicePanel({ open, onClose, controller }) {
           <label className="field-label" htmlFor="voice-source">
             听取哪台小爱的指令
           </label>
-          <select
+          <Select
             id="voice-source"
             ref={sourceField}
             className="text-input"
@@ -73,7 +73,7 @@ export default function VoicePanel({ open, onClose, controller }) {
                 {device.name} · {device.hardware}
               </option>
             ))}
-          </select>
+          </Select>
           <p id="voice-target" className="field-help">
             播放到：{features.selected_device_name || '请先在主界面连接音响'}
             {voice.listening && voice.target_id !== features.selected_device_id

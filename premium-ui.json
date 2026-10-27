@@ -31,5 +31,12 @@
   "evidence": {
     "crudFullFlow": "tests/react/desktop.test.jsx",
     "failurePaths": "tests/react/mobile.test.jsx"
+  },
+  "authoredOwners": {
+    "Select/Listbox": {
+      "component": "frontend/src/components.jsx#Select",
+      "primitive": "@radix-ui/react-select",
+      "scope": "desktop; native ownership retained for mobile and legacy"
+    }
   }
 }

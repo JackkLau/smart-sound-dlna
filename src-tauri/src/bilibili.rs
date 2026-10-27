@@ -1,4 +1,4 @@
-//! Native Bilibili extraction. Only separate AAC audio is downloaded, never video.
+//! Shared native audio download queue; Bilibili extraction and Douyin AAC remux.
 use crate::{engine::Engine, library::TrackSource, online};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,9 @@ pub struct Part {
 }
 #[derive(Clone, Serialize, Debug)]
 pub struct Preview {
+    pub provider: &'static str,
+    #[serde(skip)]
+    media_urls: Vec<String>,
     pub id: String,
     pub bvid: String,
     pub title: String,
@@ -279,7 +282,32 @@ impl Downloader {
             )
             .await?;
         check_code(&data)?;
-        let mut preview = parse_preview(&data["data"]["View"], page)?;
+        let preview = parse_preview(&data["data"]["View"], page)?;
+        self.store_preview(preview).await
+    }
+
+    pub async fn register_douyin(&self, video: crate::douyin::Video) -> Result<Preview, String> {
+        let video = video.clone().validate(&video.id)?;
+        self.store_preview(Preview {
+            provider: "douyin",
+            media_urls: video.urls,
+            id: String::new(),
+            bvid: video.id,
+            title: video.title.clone(),
+            author: video.author,
+            parts: vec![Part {
+                cid: 1,
+                page: 1,
+                title: video.title,
+                duration: video.duration,
+            }],
+            selected_page: 1,
+            created: online::now_ms(),
+        })
+        .await
+    }
+
+    async fn store_preview(&self, mut preview: Preview) -> Result<Preview, String> {
         preview.id = uuid::Uuid::new_v4().to_string();
         let mut previews = self.previews.lock().await;
         previews.retain(|_, p| online::now_ms().saturating_sub(p.created) < PREVIEW_TTL);
@@ -351,22 +379,28 @@ impl Downloader {
             if active.snapshot().await?.tracks.iter().any(|t| {
                 t.source
                     .as_ref()
-                    .is_some_and(|s| s.provider == "bilibili" && s.id == source_id)
+                    .is_some_and(|s| s.provider == preview.provider && s.id == source_id)
             }) {
-                return Err("这个分 P 已在曲库中，可直接搜索播放。".into());
+                return Err("这个音轨已在曲库中，可直接搜索播放。".into());
             }
         } else {
             return Err("客户端正在退出".into());
         }
         let mut jobs = self.jobs.lock().await;
         if jobs.iter().any(|j| {
-            j.preview.bvid == preview.bvid && j.part.cid == part.cid && active_phase(&j.view.phase)
+            j.preview.provider == preview.provider
+                && j.preview.bvid == preview.bvid
+                && j.part.cid == part.cid
+                && active_phase(&j.view.phase)
         }) {
-            return Err("这个分 P 已在下载队列中。".into());
+            return Err("这个音轨已在下载队列中。".into());
         }
         // A worker may finish between the library snapshot and this lock.
         if jobs.iter().any(|j| {
-            j.preview.bvid == preview.bvid && j.part.cid == part.cid && j.view.phase == "completed"
+            j.preview.provider == preview.provider
+                && j.preview.bvid == preview.bvid
+                && j.part.cid == part.cid
+                && j.view.phase == "completed"
         }) {
             // Completed jobs are history: a user may since have removed the
             // track. Recheck the library under this lock to retain race safety.
@@ -374,9 +408,9 @@ impl Downloader {
             if active.snapshot().await?.tracks.iter().any(|t| {
                 t.source
                     .as_ref()
-                    .is_some_and(|s| s.provider == "bilibili" && s.id == source_id)
+                    .is_some_and(|s| s.provider == preview.provider && s.id == source_id)
             }) {
-                return Err("这个分 P 已在曲库中，可直接搜索播放。".into());
+                return Err("这个音轨已在曲库中，可直接搜索播放。".into());
             }
         }
         if jobs.iter().filter(|j| active_phase(&j.view.phase)).count() >= MAX_QUEUE {
@@ -473,13 +507,19 @@ impl Downloader {
     ) -> Result<(String, String), String> {
         let _permit = tokio::select! { _ = entry.cancel.cancelled() => return Err("已取消".into()), p = self.queue.acquire() => p.map_err(|_| "下载队列已关闭")? };
         self.update(&entry.view.id, "resolving", 0, None).await;
-        let cookie = tokio::select! {
-            _ = entry.cancel.cancelled() => return Err("已取消".into()),
-            cookie = self.request_cookie() => cookie?,
-        };
-        let audio = tokio::select! {
-            _ = entry.cancel.cancelled() => return Err("已取消".into()),
-            audio = self.audio(&entry.preview.bvid, entry.part.cid, &cookie) => audio?,
+        let audio = if entry.preview.provider == "douyin" {
+            Audio {
+                urls: entry.preview.media_urls.clone(),
+            }
+        } else {
+            let cookie = tokio::select! {
+                _ = entry.cancel.cancelled() => return Err("已取消".into()),
+                cookie = self.request_cookie() => cookie?,
+            };
+            tokio::select! {
+                _ = entry.cancel.cancelled() => return Err("已取消".into()),
+                audio = self.audio(&entry.preview.bvid, entry.part.cid, &cookie) => audio?,
+            }
         };
         let directory = self.directory.clone();
         let temp =
@@ -506,14 +546,14 @@ impl Downloader {
         for address in audio.urls {
             let attempt = tokio::select! {
                 _ = entry.cancel.cancelled() => return Err("已取消".into()),
-                response = self.audio_response(&address) => response,
+                response = self.media_response(&address, entry.preview.provider) => response,
             };
             if let Ok(result) = attempt {
                 response = Some(result);
                 break;
             }
         }
-        let response = response.ok_or("音轨地址已过期或无法下载，请重试。")?;
+        let response = response.ok_or("音轨地址已过期或无法下载，请重新解析链接后下载。")?;
         let total = response.content_length();
         if total.is_some_and(|n| n > MAX_AUDIO) {
             return Err("单个音频超过 1 GB，请选择较短的分 P。".into());
@@ -544,6 +584,19 @@ impl Downloader {
         output.flush().await.map_err(|e| e.to_string())?;
         output.sync_all().await.map_err(|e| e.to_string())?;
         drop(output);
+        let temp = if entry.preview.provider == "douyin" {
+            self.update(&entry.view.id, "extracting", count, total)
+                .await;
+            let directory = self.directory.clone();
+            let cancel = entry.cancel.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::douyin::extract_audio(temp.path(), &directory, &cancel)
+            })
+            .await
+            .map_err(|_| "音轨提取任务中断")??
+        } else {
+            temp
+        };
         let mut check_file = temp.reopen().map_err(|e| e.to_string())?;
         tokio::task::spawn_blocking(move || validate_mp4(&mut check_file))
             .await
@@ -590,12 +643,16 @@ impl Downloader {
             .await
             .map_err(|e| e.to_string())??;
         let source = TrackSource {
-            provider: "bilibili".into(),
+            provider: entry.preview.provider.into(),
             id: format!("{}:{}", entry.preview.bvid, entry.part.cid),
-            url: format!(
-                "https://www.bilibili.com/video/{}?p={}",
-                entry.preview.bvid, entry.part.page
-            ),
+            url: if entry.preview.provider == "douyin" {
+                format!("https://www.douyin.com/video/{}", entry.preview.bvid)
+            } else {
+                format!(
+                    "https://www.bilibili.com/video/{}?p={}",
+                    entry.preview.bvid, entry.part.page
+                )
+            },
         };
         let result = match engine.upgrade() {
             Some(engine) => {
@@ -632,13 +689,31 @@ impl Downloader {
         }
         select_audio(&data["data"])
     }
-    async fn audio_response(&self, address: &str) -> Result<reqwest::Response, String> {
-        let mut url = audio_url(address)?;
+    async fn media_response(
+        &self,
+        address: &str,
+        provider: &str,
+    ) -> Result<reqwest::Response, String> {
+        let validate = |raw: &str| {
+            if provider == "douyin" {
+                crate::douyin::media_url(raw)
+            } else {
+                audio_url(raw)
+            }
+        };
+        let mut url = validate(address)?;
         for _ in 0..4 {
             let response = self
                 .client
                 .get(self.endpoint(url.clone()))
-                .header(reqwest::header::REFERER, "https://www.bilibili.com/")
+                .header(
+                    reqwest::header::REFERER,
+                    if provider == "douyin" {
+                        "https://www.douyin.com/"
+                    } else {
+                        "https://www.bilibili.com/"
+                    },
+                )
                 .send()
                 .await
                 .map_err(|_| "音轨下载连接失败")?;
@@ -648,7 +723,7 @@ impl Downloader {
                     .get(reqwest::header::LOCATION)
                     .and_then(|h| h.to_str().ok())
                     .ok_or("音轨跳转地址缺失")?;
-                url = audio_url(url.join(location).map_err(|_| "音轨跳转无效")?.as_str())?;
+                url = validate(url.join(location).map_err(|_| "音轨跳转无效")?.as_str())?;
                 continue;
             }
             if response.status() != reqwest::StatusCode::OK {
@@ -826,6 +901,8 @@ fn parse_preview(data: &Value, page: u32) -> Result<Preview, String> {
         return Err("这个分 P 不存在，请检查链接中的 p 参数。".into());
     }
     Ok(Preview {
+        provider: "bilibili",
+        media_urls: Vec::new(),
         id: String::new(),
         bvid,
         title,

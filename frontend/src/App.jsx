@@ -647,7 +647,7 @@ export default function App({ invoke }) {
                   disabled={blocked}
                   onClick={() => setPanel('bilibili')}
                 >
-                  从 Bilibili 导入
+                  从视频导入
                 </button>
               </div>
             </div>

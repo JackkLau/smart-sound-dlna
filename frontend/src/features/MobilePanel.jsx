@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import qrcode from 'qrcode-generator';
-import { Dialog } from '../components.jsx';
+import { Dialog, Select } from '../components.jsx';
 import { messageOf } from '../utils.js';
 import { Form, ErrorMessage } from './Form.jsx';
 
@@ -81,7 +81,7 @@ export default function MobilePanel({ open, onClose, controller }) {
                 <label className="field-label" htmlFor="mobile-network">
                   电脑网络（选择与手机同一网段的 IP）
                 </label>
-                <select
+                <Select
                   id="mobile-network"
                   className="text-input"
                   value={entry?.address || ''}
@@ -93,7 +93,7 @@ export default function MobilePanel({ open, onClose, controller }) {
                       {item.address}
                     </option>
                   ))}
-                </select>
+                </Select>
               </div>
             )}
             <p id="mobile-status" className="field-help" role="status">

@@ -1,4 +1,88 @@
-import { useLayoutEffect, useRef } from 'react';
+import { Children, createContext, useContext, useLayoutEffect, useRef, useState } from 'react';
+import * as SelectPrimitive from '@radix-ui/react-select';
+
+const SelectContainer = createContext(null);
+
+// A single accessible popup recipe. Modal content must stay in the native
+// dialog's top layer, otherwise the browser makes its options inert.
+export function Select({ children, value, onChange, disabled, className = '', ...props }) {
+  const container = useContext(SelectContainer);
+  const options = Children.toArray(children);
+  return (
+    <SelectPrimitive.Root
+      value={String(value ?? '')}
+      disabled={disabled}
+      onValueChange={(next) => onChange?.({ target: { value: next } })}
+    >
+      <SelectPrimitive.Trigger {...props} className={`select-trigger ${className}`}>
+        <SelectPrimitive.Value placeholder="请选择" />
+        <SelectPrimitive.Icon>
+          <Icon name="arrow" className="select-chevron" />
+        </SelectPrimitive.Icon>
+      </SelectPrimitive.Trigger>
+      <SelectPrimitive.Portal container={container || undefined}>
+        <SelectPrimitive.Content
+          className="select-popup"
+          position="popper"
+          sideOffset={6}
+          collisionPadding={12}
+          onEscapeKeyDown={(event) => event.stopPropagation()}
+        >
+          <SelectPrimitive.ScrollUpButton className="select-scroll">
+            ⌃
+          </SelectPrimitive.ScrollUpButton>
+          <SelectPrimitive.Viewport>
+            {options.map((option) => (
+              <SelectPrimitive.Item
+                className="select-option"
+                key={option.props.value}
+                value={String(option.props.value || '__empty__')}
+                disabled={option.props.disabled || !option.props.value}
+              >
+                <SelectPrimitive.ItemText>{option.props.children}</SelectPrimitive.ItemText>
+                <SelectPrimitive.ItemIndicator>
+                  <Icon name="check" />
+                </SelectPrimitive.ItemIndicator>
+              </SelectPrimitive.Item>
+            ))}
+          </SelectPrimitive.Viewport>
+          <SelectPrimitive.ScrollDownButton className="select-scroll">
+            ⌄
+          </SelectPrimitive.ScrollDownButton>
+        </SelectPrimitive.Content>
+      </SelectPrimitive.Portal>
+    </SelectPrimitive.Root>
+  );
+}
+
+export function ClearableInput({
+  inputRef,
+  value,
+  onClear,
+  disabled,
+  clearLabel = '清除链接',
+  ...props
+}) {
+  return (
+    <div className="clearable-field">
+      <input {...props} ref={inputRef} value={value} disabled={disabled} />
+      {value && (
+        <button
+          type="button"
+          className="field-clear"
+          aria-label={clearLabel}
+          disabled={disabled}
+          onClick={() => {
+            onClear();
+            inputRef.current?.focus();
+          }}
+        >
+          <Icon name="close" />
+        </button>
+      )}
+    </div>
+  );
+}
 
 const icons = {
   music: (
@@ -73,8 +157,10 @@ export function Dialog({
   className = 'feature-dialog',
 }) {
   const ref = useRef(null);
+  const [container, setContainer] = useState(null);
   useLayoutEffect(() => {
     const dialog = ref.current;
+    setContainer(dialog);
     if (!open) {
       if (dialog.open) dialog.close();
       return;
@@ -116,7 +202,7 @@ export function Dialog({
           <Icon name="close" />
         </button>
       </div>
-      {children}
+      <SelectContainer.Provider value={container}>{children}</SelectContainer.Provider>
     </dialog>
   );
 }
