@@ -18,6 +18,15 @@ use std::{
 use tokio::sync::{watch, Mutex as AsyncMutex, MutexGuard, Notify};
 use tokio_util::sync::CancellationToken;
 
+#[path = "engine_video.rs"]
+mod video_engine;
+use video_engine::VideoRuntime;
+pub use video_engine::{PlaybackContext, VideoSnapshot};
+
+#[cfg(test)]
+#[path = "engine_video_tests.rs"]
+mod video_tests;
+
 #[cfg(test)]
 #[path = "engine_connection_tests.rs"]
 mod connection_tests;
@@ -40,6 +49,7 @@ pub struct Snapshot {
     pub discovery_error: Option<String>,
     pub interfaces: Vec<String>,
     pub media_port: u16,
+    pub playback_context: PlaybackContext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -295,6 +305,7 @@ pub struct Engine {
     library: Arc<Mutex<Library>>,
     media: MediaServer,
     player: AsyncMutex<Player>,
+    video: AsyncMutex<VideoRuntime>,
     actions: AsyncMutex<()>,
     discovery: AsyncMutex<()>,
     activity: watch::Sender<u64>,
@@ -304,6 +315,14 @@ pub struct Engine {
 
 impl Engine {
     pub async fn new(data_dir: PathBuf) -> Result<Arc<Self>, String> {
+        let enabled = std::env::var("XIAOMI_DLNA_VIDEO").as_deref() == Ok("1");
+        Self::new_with_video_enabled(data_dir, enabled).await
+    }
+
+    pub(crate) async fn new_with_video_enabled(
+        data_dir: PathBuf,
+        video_enabled: bool,
+    ) -> Result<Arc<Self>, String> {
         let downloads = Downloader::new(&data_dir)?;
         let voice = VoiceService::new()?;
         let library = tokio::task::spawn_blocking(move || Library::load(data_dir))
@@ -318,6 +337,7 @@ impl Engine {
             library,
             media,
             player: AsyncMutex::new(Player::default()),
+            video: AsyncMutex::new(VideoRuntime::new(video_enabled)),
             actions: AsyncMutex::new(()),
             discovery: AsyncMutex::new(()),
             activity: watch::channel(0).0,
@@ -400,6 +420,7 @@ impl Engine {
     }
 
     pub async fn snapshot(&self) -> Result<Snapshot, String> {
+        let playback_context = self.playback_context().await;
         let tracks = self.tracks().await?;
         let p = self.player.lock().await;
         let mut devices: Vec<Device> = p.devices.values().map(|(d, _)| d.clone()).collect();
@@ -426,6 +447,7 @@ impl Engine {
             discovery_error: p.discovery_error.clone(),
             interfaces: p.interfaces.clone(),
             media_port: self.media.port,
+            playback_context,
         })
     }
 
@@ -486,6 +508,7 @@ impl Engine {
 
     pub async fn select(&self, id: &str) -> Result<Snapshot, String> {
         let _guard = self.begin_action().await;
+        self.require_music_control().await?;
         let previous = {
             let p = self.player.lock().await;
             if !p.devices.contains_key(id) {
@@ -500,10 +523,17 @@ impl Engine {
                 None
             }
         };
+        let selection_changed = self.player.lock().await.selected.as_deref() != Some(id);
+        let previous_device = previous.clone();
         let stop_error = match previous {
             Some(device) => Controller::new(device).stop().await.err(),
             None => None,
         };
+        if self.video_enabled().await {
+            if let (Some(device), Some(error)) = (previous_device, stop_error.as_ref()) {
+                return Err(self.music_switch_stop_unknown(device, error).await);
+            }
+        }
         let mut p = self.player.lock().await;
         if !p.devices.contains_key(id) {
             return Err("设备已离线，请重新搜索。".into());
@@ -528,6 +558,9 @@ impl Engine {
         }
         p.connection.retry_now();
         drop(p);
+        if selection_changed {
+            self.music_owner_changed(false).await;
+        }
         drop(_guard);
         self.poll_wake.notify_one();
         self.snapshot().await
@@ -644,6 +677,7 @@ impl Engine {
     ) -> Result<String, String> {
         let command = voice::parse(text)?;
         let _guard = self.begin_action().await;
+        self.require_music_control().await?;
         let selected = self.selected().await?;
         if expected_device.is_some_and(|id| id != selected.id) {
             return Err("播放音响已切换，请在语音设置里重新绑定后再点播。".into());
@@ -704,6 +738,7 @@ impl Engine {
     }
 
     async fn check_remote_device(&self, expected: &str) -> Result<(), String> {
+        self.require_music_control().await?;
         let p = self.player.lock().await;
         if p.selected.as_deref() != Some(expected) {
             return Err("电脑选择的音响已改变，请刷新后重试。".into());
@@ -734,6 +769,7 @@ impl Engine {
     }
 
     async fn play_locked(&self, id: &str) -> Result<(), String> {
+        self.require_music_control().await?;
         let library = self.library.clone();
         let track_id = id.to_owned();
         let (track, file) = tokio::task::spawn_blocking(move || {
@@ -753,6 +789,8 @@ impl Engine {
             .await
             .map_err(|e| e.to_string())??;
         let uri = self.media.url(&host, &track);
+        // Invalidate prepared cross-media requests before changing the renderer.
+        self.music_owner_changed(true).await;
         // Disarm old playback before sending either SOAP request.
         self.player.lock().await.completion = Completion::default();
         let result = Controller::new(device)
@@ -790,6 +828,7 @@ impl Engine {
     }
 
     async fn control_locked(&self, action: &str, value: Value) -> Result<Snapshot, String> {
+        self.require_music_control().await?;
         if action == "mode" {
             let mode = value.as_str().ok_or("无效的播放模式")?;
             if !["sequential", "repeat-one", "repeat-all"].contains(&mode) {
@@ -879,11 +918,18 @@ impl Engine {
             "volume" => p.volume = value.as_u64().map(|v| v as u8),
             _ => {}
         }
+        let resumed_audio = action == "resume" && p.current.is_some();
         drop(p);
+        if action == "stop" {
+            self.music_owner_changed(false).await;
+        } else if resumed_audio && self.playback_context().await.active_kind == "none" {
+            self.music_owner_changed(true).await;
+        }
         self.snapshot().await
     }
 
     async fn advance_locked(&self, direction: i32, automatic: bool) -> Result<(), String> {
+        self.require_music_control().await?;
         let tracks = self.tracks().await?;
         let p = self.player.lock().await;
         let next = next_track(
@@ -895,6 +941,7 @@ impl Engine {
         );
         let stop_at_boundary = automatic && p.current.is_some() && p.transport == "PLAYING";
         drop(p);
+        let reached_end = automatic && next.is_none();
         if let Some(id) = next {
             self.play_locked(&id).await?;
         } else if stop_at_boundary {
@@ -906,6 +953,9 @@ impl Engine {
             p.position = 0;
             p.completion = Completion::default();
         }
+        if reached_end {
+            self.music_owner_changed(false).await;
+        }
         Ok(())
     }
 
@@ -914,6 +964,9 @@ impl Engine {
         let Ok(_guard) = self.actions.try_lock() else {
             return;
         };
+        if self.poll_video_locked(&mut activity).await {
+            return;
+        }
         if self
             .player
             .lock()
@@ -941,6 +994,7 @@ impl Engine {
         if activity.has_changed().unwrap_or(true) {
             return;
         }
+        let previously_owned = p.current.is_some();
         let advance = match status {
             Ok(status) => p.observe_status(status, Instant::now()),
             Err(error) => {
@@ -954,7 +1008,11 @@ impl Engine {
                 false
             }
         };
+        let detached = previously_owned && p.current.is_none();
         drop(p);
+        if detached {
+            self.music_owner_changed(false).await;
+        }
         if advance && !activity.has_changed().unwrap_or(true) {
             if let Err(error) = self.advance_locked(1, true).await {
                 self.player.lock().await.error = Some(error);

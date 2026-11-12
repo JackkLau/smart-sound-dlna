@@ -130,7 +130,19 @@ The default density serves repeated library and import operations: 28px desktop 
 
 Every authored dialog shares one frame: `.dialog-heading` is a non-scrolling sibling of `.dialog-body`. The open dialog uses a column flex layout bounded by the viewport; only the body has vertical overflow, a stable scrollbar gutter and contained overscroll. The title and close button remain visible at every body scroll position. Header and body use 20px horizontal padding (16px in the narrow layout); body controls have 12px scroll margins so keyboard focus remains clear of the frame edges. The manual-device form is itself the body; feature dialogs wrap their existing forms in the shared body. Primary actions remain part of their form and are reachable by body scrolling. Native modal focus, Escape, pending-dismissal protection, validation and draft behavior are owned by React state, the shared `Dialog` component and form hooks.
 
-### Desktop IPC contract
+### Video casting M0
+
+The feature-gated desktop video surface adds a music/video navigation row using normal buttons with pressed state. Navigation preserves the music page's search, pagination and mounted state, and never selects a renderer or starts/stops playback. The video surface follows the same light palette, spacing, authored Select, native Dialog and document-owned scrolling. Its two-column source/target layout collapses into natural document flow on narrow windows. No video bytes, file paths or resource tokens pass through the renderer.
+
+New video modules use TypeScript. `useVideo` owns read-only video polling and stale-response rejection, while all foreground video mutations reuse `useDesktop.mutate`; it is not a second mutation queue. Video actions remain explicitly gated by native capabilities and errors. The shared `Player.Range` retains draft/commit semantics; only the video IPC boundary converts seconds to milliseconds. Existing music commands and units remain unchanged.
+
+The candidate television Select changes only local input. Preparing a plan performs no playback mutation. Switching an active music/video session uses the shared Dialog to name the replacement and explain that failure does not automatically replay the old content. Returning to music uses a distinct `start_music_play` command after an explicit desktop action; legacy music controls stay unavailable while video owns playback. Imports and library browsing remain available. The active video dock remains visible when browsing the music page.
+
+The video page distinguishes command acceptance, HTTP reading and the television's reported transport state. It never infers visible HDR or audible output from a successful command. Unknown states retain an explicit stop/recheck path. The minimal page lists detected tracks but exposes no unsupported track-switching or transcoding controls. The feature is hidden unless `get_config.video_casting_enabled` is true.
+
+Canonical owners remain `components.jsx#Select`, `components.jsx#Dialog`, `Player.jsx#Range` and `useDesktop.mutate`. `video/VideoPanel.tsx` is the business-specific layout; `video/useVideo.ts` owns its independent read state. No new runtime design tokens or independent toast system are added. `tests/react/video.test.tsx` covers navigation, read-only preparation, explicit handoff, busy/error states and disabled music controls; existing music suites remain required.
+
+### Music IPC contract
 
 | Renderer operation | Native command | Arguments / result |
 | --- | --- | --- |

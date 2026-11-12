@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Dialog, Icon } from './components.jsx';
+import { Dialog, Icon, Select } from './components.jsx';
+import VideoPanel, { VideoPlayer } from './video/VideoPanel';
+import { useVideo, videoMessage } from './video/useVideo';
 import { formatSize, messageOf } from './utils.js';
 import { useDesktop } from './useDesktop.js';
 import { TrackDialogs } from './TrackDialogs.jsx';
@@ -41,6 +43,33 @@ export default function App({ invoke }) {
     importMusic,
     discover,
   } = ui;
+  const videoEnabled = config?.video_casting_enabled === true;
+  const video = useVideo({
+    enabled: videoEnabled,
+    invoke: ui.invoke,
+    mutate,
+    busy: busy || importPending,
+    ownerRevision: state.playback_context?.owner_revision || 0,
+    refreshMusic: refresh,
+    getMutationState: ui.getMutationState,
+  });
+  const [surface, setSurface] = useState('music');
+  const [musicSwitch, setMusicSwitch] = useState(null);
+  const [musicTarget, setMusicTarget] = useState('');
+  const [switchError, setSwitchError] = useState('');
+  const videoStateCurrent =
+    video.state.owner_revision >= (state.playback_context?.owner_revision || 0);
+  const videoActive =
+    videoStateCurrent &&
+    video.state.session &&
+    !['stopped', 'ended', 'failed', 'detached'].includes(video.state.session.phase);
+  const musicBlocked =
+    state.playback_context?.music_control_blocked_reason ||
+    (videoStateCurrent && video.state.owner_kind === 'unknown'
+      ? '播放状态尚未确认，请先核对或停止当前内容。'
+      : videoActive
+        ? '当前正在影视播放，请在电脑明确切换到音乐。'
+        : '');
   const [view, setView] = useState(savedView);
   const [search, setSearch] = useState(view.query);
   const [panel, setPanel] = useState(null);
@@ -73,16 +102,19 @@ export default function App({ invoke }) {
     }
     if (view.page !== page) setView((current) => ({ ...current, page }));
   }, [loaded, query, page, view.page]);
-  const reason = !state.selected_device_id
-    ? '先连接音响，再播放音乐'
-    : state.device_connection === 'disconnected'
-      ? '音响已断开，正在自动重连'
-      : state.device_connection !== 'connected'
-        ? '正在确认音响连接…'
-        : '';
+  const reason =
+    musicBlocked ||
+    (!state.selected_device_id
+      ? '先连接音响，再播放音乐'
+      : state.device_connection === 'disconnected'
+        ? '音响已断开，正在自动重连'
+        : state.device_connection !== 'connected'
+          ? '正在确认音响连接…'
+          : '');
   const usable = Boolean(connected && config);
   const blocked = !usable || busy || importPending;
   const ready = !blocked && !reason;
+  const canChooseMusic = ready || (!blocked && videoEnabled && Boolean(musicBlocked));
   const device = state.devices.find((item) => item.id === state.selected_device_id);
   const devices = [...state.devices].sort(
     (a, b) =>
@@ -131,7 +163,13 @@ export default function App({ invoke }) {
     ),
   ].join(' ');
   const playTrack = async (trackId) => {
-    if (!ready) return;
+    if (!canChooseMusic) return;
+    if (musicBlocked) {
+      setMusicSwitch(state.tracks.find((track) => track.id === trackId) || null);
+      setMusicTarget(state.selected_device_id || '');
+      setSwitchError('');
+      return;
+    }
     try {
       await mutate('play_track', { trackId });
     } catch {
@@ -139,6 +177,7 @@ export default function App({ invoke }) {
     }
   };
   const control = async (action, value = null) => {
+    if (musicBlocked) return;
     try {
       await mutate('control', { action, value });
     } catch {
@@ -220,8 +259,8 @@ export default function App({ invoke }) {
         : '添加本地音乐，或导入整个文件夹。连接音响后，就能把音乐送到耳边。';
   return (
     <>
-      <a className="skip-link" href="#library-title">
-        跳到音乐库
+      <a className="skip-link" href={surface === 'video' ? '#video-title' : '#library-title'}>
+        {surface === 'video' ? '跳到影视投送' : '跳到音乐库'}
       </a>
       <header className="topbar">
         <div className="brand" aria-label="小米音响本地音乐桌面客户端">
@@ -244,7 +283,44 @@ export default function App({ invoke }) {
                 : '客户端未就绪'}
         </span>
       </header>
-      <main className="workspace">
+      {videoEnabled && (
+        <nav className="media-navigation" aria-label="媒体类型">
+          <button
+            type="button"
+            className="button outline"
+            aria-pressed={surface === 'music'}
+            onClick={() => setSurface('music')}
+          >
+            音乐
+          </button>
+          <button
+            type="button"
+            className="button outline"
+            aria-pressed={surface === 'video'}
+            onClick={() => setSurface('video')}
+          >
+            影视
+          </button>
+        </nav>
+      )}
+      {videoEnabled && (
+        <div hidden={surface !== 'video'}>
+          <VideoPanel
+            video={video}
+            devices={state.devices}
+            busy={blocked}
+            connectionError={!usable ? connectionError || '客户端尚未就绪，请重新检查。' : ''}
+            reconnect={connect}
+            discovering={discovering}
+            discover={discover}
+            addDevice={() => {
+              setDeviceError('');
+              setPanel('device');
+            }}
+          />
+        </div>
+      )}
+      <main className="workspace" hidden={videoEnabled && surface !== 'music'}>
         <aside className="device-panel" aria-labelledby="device-title">
           <div className="section-heading">
             <span className="eyebrow">播放设备</span>
@@ -327,8 +403,9 @@ export default function App({ invoke }) {
                   data-device-id={item.id}
                   aria-pressed={selected}
                   aria-label={`${selected ? status : '选择'} ${item.name}${item.is_xiaomi_pro ? '，小爱音箱 Pro' : ''}`}
-                  disabled={blocked}
+                  disabled={blocked || Boolean(musicBlocked)}
                   onClick={async () => {
+                    if (musicBlocked) return;
                     if (selected && state.device_connection !== 'disconnected') return;
                     try {
                       await mutate('select_device', { deviceId: item.id }, `正在连接 ${item.name}`);
@@ -488,9 +565,13 @@ export default function App({ invoke }) {
                   <button
                     className="icon-button track-play"
                     type="button"
-                    aria-label={`播放 ${track.title || track.filename}`}
-                    title={reason || `播放 ${track.title || track.filename}`}
-                    disabled={!ready}
+                    aria-label={`${musicBlocked ? '切换到音乐并播放' : '播放'} ${track.title || track.filename}`}
+                    title={
+                      musicBlocked
+                        ? '将停止当前内容，再播放这首音乐'
+                        : reason || `播放 ${track.title || track.filename}`
+                    }
+                    disabled={!canChooseMusic}
                     onClick={() => playTrack(track.id)}
                   >
                     <Icon name="play" />
@@ -672,15 +753,23 @@ export default function App({ invoke }) {
           </p>
         </section>
       </main>
-      <Player
-        state={state}
-        ready={ready}
-        available={usable}
-        busy={busy || importPending}
-        reason={reason}
-        control={control}
-        playTrack={playTrack}
-      />
+      {videoActive ? (
+        <VideoPlayer
+          video={video}
+          busy={busy || importPending}
+          onOpen={() => setSurface('video')}
+        />
+      ) : (
+        <Player
+          state={state}
+          ready={ready}
+          available={usable}
+          busy={busy || importPending || Boolean(musicBlocked)}
+          reason={reason}
+          control={control}
+          playTrack={playTrack}
+        />
+      )}
       <div
         className="toast"
         id="toast"
@@ -766,6 +855,86 @@ export default function App({ invoke }) {
             </button>
           </div>
         </form>
+      </Dialog>
+      <Dialog
+        id="music-switch-dialog"
+        title="切换回音乐"
+        eyebrow="切换当前播放"
+        description="music-switch-description"
+        open={Boolean(musicSwitch)}
+        busy={busy}
+        onClose={() => setMusicSwitch(null)}
+      >
+        <div className="dialog-body">
+          <p id="music-switch-description">
+            将停止当前内容，并播放「{musicSwitch?.title || musicSwitch?.filename}」。
+            原音乐队列偏好会保留；无法确认电视已经停止时，不会开始新的播放。
+          </p>
+          <label className="field-label" htmlFor="music-switch-device">
+            播放音乐的设备
+          </label>
+          <Select
+            id="music-switch-device"
+            aria-label="播放音乐的设备"
+            value={musicTarget}
+            disabled={busy}
+            onChange={(event) => setMusicTarget(event.target.value)}
+          >
+            <option value="">请选择设备</option>
+            {state.devices.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </Select>
+          <p className="field-error" role="alert">
+            {switchError}
+          </p>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              className="button outline"
+              data-autofocus
+              disabled={busy}
+              onClick={() => setMusicSwitch(null)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="button primary"
+              disabled={busy || !musicTarget}
+              onClick={async () => {
+                if (!musicSwitch || busy) return;
+                setSwitchError('');
+                try {
+                  const result = await mutate(
+                    'start_music_play',
+                    {
+                      trackId: musicSwitch.id,
+                      deviceId: musicTarget,
+                      expectedOwnerRevision: Math.max(
+                        video.state.owner_revision,
+                        state.playback_context?.owner_revision || 0,
+                      ),
+                      replaceCurrent: true,
+                    },
+                    '',
+                    { scopedError: true },
+                  );
+                  if (result) {
+                    setMusicSwitch(null);
+                    void video.refresh();
+                  }
+                } catch (error) {
+                  setSwitchError(videoMessage(error));
+                }
+              }}
+            >
+              {busy ? '正在切换…' : '停止当前内容并播放音乐'}
+            </button>
+          </div>
+        </div>
       </Dialog>
       <TrackDialogs
         active={activeTrack}

@@ -1,0 +1,9 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/ffprobe"],
+    "resources": {
+      "binaries/ffprobe-manifest.json": "ffprobe-manifest.json",
+      "../docs/third-party/ffprobe.md": "licenses/ffprobe.md"
+    }
+  }
+}

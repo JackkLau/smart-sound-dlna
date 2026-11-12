@@ -1,0 +1,409 @@
+import React from 'react';
+import '@testing-library/jest-dom/vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import App from '../../frontend/src/App.jsx';
+import type { VideoInfo, VideoSnapshot } from '../../frontend/src/video/types';
+
+const entry: VideoInfo = {
+  id: 'film',
+  title: '测试影片.mkv',
+  format: 'mkv',
+  size: '8589934592',
+  duration_ms: 120000,
+  video_codec: 'hevc',
+  width: 3840,
+  height: 2160,
+  pixel_format: 'yuv420p10le',
+  color_transfer: null,
+  audio_tracks: [{ index: 1, codec: 'aac', language: 'zho', title: null, channels: 2 }],
+  subtitle_tracks: [],
+};
+const initialVideo = (patch: Partial<VideoSnapshot> = {}): VideoSnapshot => ({
+  enabled: true,
+  owner_kind: 'audio',
+  entry: null,
+  probe: null,
+  plan: null,
+  session: null,
+  owner_revision: 1,
+  music_active: true,
+  error: null,
+  ...patch,
+});
+const devices = [
+  { id: 'speaker', name: '客厅小爱', address: '192.168.1.5', is_xiaomi: true },
+  { id: 'tv', name: '创维 A7H', address: '192.168.1.6', is_xiaomi: false },
+];
+const music = () => ({
+  tracks: [{ id: 'song', title: '原来的歌曲', filename: 'song.mp3', size: 1000, format: 'mp3' }],
+  devices,
+  selected_device_id: 'speaker',
+  device_connection: 'connected',
+  current_track_id: 'song',
+  transport_state: 'PLAYING',
+  position: 12,
+  duration: 180,
+  volume: 20,
+  warnings: [],
+  status_error: null,
+  queue_mode: 'repeat-all',
+  discovering: false,
+  discovery_error: null,
+  playback_context: {
+    active_kind: 'audio',
+    owner_revision: 1,
+    music_control_blocked_reason: null as string | null,
+  },
+});
+const active = (phase = 'playing') =>
+  initialVideo({
+    entry,
+    music_active: false,
+    owner_kind: 'video',
+    owner_revision: 2,
+    session: {
+      id: 'session',
+      generation: 2,
+      media_id: entry.id,
+      device_id: 'tv',
+      title: entry.title,
+      phase,
+      position_ms: 10000,
+      duration_ms: 120000,
+      can_pause: true,
+      can_seek: false,
+      command_accepted: true,
+      http_requested: false,
+      transport_state: 'PLAYING',
+      error: null,
+    },
+  });
+const settle = () =>
+  act(async () => {
+    await Promise.resolve();
+  });
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (value: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+function setup({
+  video = initialVideo(),
+  enabled = true,
+  operation,
+}: {
+  video?: VideoSnapshot;
+  enabled?: boolean;
+  operation?: (command: string, args: Record<string, unknown>) => unknown;
+} = {}) {
+  let data = structuredClone(video);
+  let audio = music();
+  let nextVideoRead: ReturnType<typeof deferred<VideoSnapshot>> | null = null;
+  if (data.session)
+    audio = {
+      ...audio,
+      current_track_id: '',
+      transport_state: 'STOPPED',
+      playback_context: {
+        active_kind: 'video',
+        owner_revision: 2,
+        music_control_blocked_reason: '当前正在影视播放，请先切换。',
+      },
+    };
+  const invoke = vi.fn(async (command: string, args: Record<string, unknown> = {}) => {
+    if (command === 'get_config')
+      return { formats: ['mp3'], max_tracks: 20000, video_casting_enabled: enabled };
+    if (command === 'get_state') return structuredClone(audio);
+    if (command === 'get_features')
+      return {
+        voice: { connected: false, listening: false, devices: [] },
+        downloads: { authenticated: false, jobs: [] },
+        xiaomi_login: { phase: 'idle' },
+        bilibili_login: { phase: 'idle' },
+      };
+    if (command === 'get_video_state') {
+      if (nextVideoRead) {
+        const read = nextVideoRead;
+        nextVideoRead = null;
+        return read.promise;
+      }
+      return structuredClone(data);
+    }
+    const result = await operation?.(command, args);
+    if (result !== undefined) return result;
+    if (command === 'pick_video_file') data = { ...data, entry, probe: null, plan: null };
+    else if (command === 'prepare_video_play')
+      data = {
+        ...data,
+        plan: {
+          id: 'plan',
+          media_id: String(args.mediaId),
+          device_id: String(args.deviceId),
+          mode: 'trial',
+          reason: '设备声明未知，可试播。',
+          can_pause: true,
+          can_seek: false,
+        },
+      };
+    else if (command === 'start_video_play') data = active('awaiting_evidence');
+    else if (command === 'control_video')
+      data = {
+        ...data,
+        session: data.session
+          ? { ...data.session, phase: args.action === 'stop' ? 'stopped' : 'paused' }
+          : null,
+      };
+    else if (command === 'start_music_play') {
+      audio = {
+        ...music(),
+        playback_context: {
+          active_kind: 'audio',
+          owner_revision: 3,
+          music_control_blocked_reason: null,
+        },
+      };
+      data = initialVideo({ owner_revision: 3 });
+      return structuredClone(audio);
+    } else if (command === 'play_track') return audio;
+    else if (command === 'discover_devices') return audio;
+    else throw new Error('Unexpected command: ' + command);
+    return structuredClone(data);
+  });
+  render(<App invoke={invoke} />);
+  return {
+    invoke,
+    calls: (command: string) => invoke.mock.calls.filter(([name]) => name === command),
+    setVideo: (patch: Partial<VideoSnapshot>) => {
+      data = { ...data, ...patch };
+    },
+    async ready() {
+      await settle();
+      expect(screen.getByText('客户端已就绪')).toBeVisible();
+    },
+    async open() {
+      fireEvent.click(screen.getByRole('button', { name: '影视' }));
+      await settle();
+    },
+    async tick() {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+    },
+    pauseVideoRead() {
+      const read = deferred<VideoSnapshot>();
+      nextVideoRead = read;
+      return read;
+    },
+  };
+}
+async function chooseTelevision() {
+  fireEvent.keyDown(screen.getByRole('combobox', { name: '候选电视' }), { key: 'ArrowDown' });
+  await settle();
+  fireEvent.click(screen.getByRole('option', { name: '创维 A7H' }));
+  await settle();
+}
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => vi.useRealTimers());
+
+describe('video casting keeps music boundaries intact', () => {
+  it('treats unknown ownership without a video session as an explicit replacement', async () => {
+    const app = setup({
+      video: initialVideo({ entry, owner_kind: 'unknown', music_active: false }),
+      operation: (command) => {
+        if (command === 'start_video_play')
+          throw new Error('ACTIVE_SESSION_CONFLICT：请先确认原设备停止。');
+      },
+    });
+    await app.ready();
+    await app.open();
+    await chooseTelevision();
+    fireEvent.click(screen.getByRole('button', { name: '检查并准备' }));
+    await settle();
+    fireEvent.click(screen.getByRole('button', { name: '切换并播放影片' }));
+    await settle();
+    const dialog = screen.getByRole('dialog', { name: '切换到影片' });
+    expect(dialog).toHaveTextContent('将停止当前内容');
+    fireEvent.click(within(dialog).getByRole('button', { name: '停止当前内容并播放' }));
+    await settle();
+    expect(app.calls('start_video_play')[0][1]).toEqual({
+      planId: 'plan',
+      expectedOwnerRevision: 1,
+      replaceCurrent: true,
+    });
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('请先确认原设备停止。');
+    expect(within(dialog).getByRole('alert')).not.toHaveTextContent('ACTIVE_SESSION_CONFLICT');
+  });
+
+  it('keeps a probe failure visible across polling while music continues', async () => {
+    const app = setup({
+      operation: (command) => {
+        if (command === 'pick_video_file') throw new Error('FFprobe 未就绪，请重新准备媒体工具。');
+      },
+    });
+    await app.ready();
+    await app.open();
+    fireEvent.click(screen.getByRole('button', { name: '选择影片' }));
+    await settle();
+    await app.tick();
+    expect(screen.getByRole('alert')).toHaveTextContent('FFprobe 未就绪');
+    expect(screen.getByRole('contentinfo', { name: '音乐播放控制' })).toHaveTextContent(
+      '原来的歌曲',
+    );
+    expect(app.calls('control')).toHaveLength(0);
+    expect(app.calls('start_video_play')).toHaveLength(0);
+  });
+
+  it('cancels only the probe task without sending any playback command', async () => {
+    const app = setup({
+      video: initialVideo({ probe: { task_id: 'probe-task', status: 'probing', error: null } }),
+      operation: (command) =>
+        command === 'cancel_video_probe'
+          ? initialVideo({ probe: { task_id: 'probe-task', status: 'cancelled', error: null } })
+          : undefined,
+    });
+    await app.ready();
+    await app.open();
+    expect(screen.getByRole('button', { name: '选择影片' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '取消读取' }));
+    await settle();
+    expect(app.calls('cancel_video_probe')[0][1]).toEqual({ taskId: 'probe-task' });
+    expect(screen.getByRole('button', { name: '选择影片' })).toBeEnabled();
+    expect(app.calls('control')).toHaveLength(0);
+    expect(app.calls('start_video_play')).toHaveLength(0);
+  });
+
+  it('does not query or expose video when the native feature is off', async () => {
+    const app = setup({ enabled: false });
+    await app.ready();
+    expect(screen.queryByRole('button', { name: '影视' })).toBeNull();
+    expect(app.calls('get_video_state')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: '播放 原来的歌曲' }));
+    await settle();
+    expect(app.calls('play_track')).toHaveLength(1);
+  });
+
+  it('navigation, picking, candidate selection and preparation never dispatch playback', async () => {
+    const app = setup();
+    await app.ready();
+    await app.open();
+    fireEvent.click(screen.getByRole('button', { name: '选择影片' }));
+    await settle();
+    await chooseTelevision();
+    fireEvent.click(screen.getByRole('button', { name: '检查并准备' }));
+    await settle();
+    expect(app.calls('prepare_video_play')[0][1]).toEqual({ mediaId: 'film', deviceId: 'tv' });
+    expect(screen.getByText('原文件直传', { exact: true })).toBeVisible();
+    for (const command of ['select_device', 'control', 'start_video_play', 'play_track'])
+      expect(app.calls(command)).toHaveLength(0);
+    expect(screen.getByRole('contentinfo', { name: '音乐播放控制' })).toHaveTextContent(
+      '原来的歌曲',
+    );
+  });
+
+  it('requires an explicit handoff and does not replay a pending start', async () => {
+    const pending = deferred<VideoSnapshot>();
+    const app = setup({
+      video: initialVideo({ entry }),
+      operation: (command) => (command === 'start_video_play' ? pending.promise : undefined),
+    });
+    await app.ready();
+    await app.open();
+    await chooseTelevision();
+    fireEvent.click(screen.getByRole('button', { name: '检查并准备' }));
+    await settle();
+    fireEvent.click(screen.getByRole('button', { name: '切换并播放影片' }));
+    await settle();
+    const dialog = screen.getByRole('dialog', { name: '切换到影片' });
+    expect(app.calls('start_video_play')).toHaveLength(0);
+    const start = within(dialog).getByRole('button', { name: '停止当前内容并播放' });
+    fireEvent.click(start);
+    fireEvent.click(start);
+    expect(app.calls('start_video_play')).toHaveLength(1);
+    expect(app.calls('start_video_play')[0][1]).toEqual({
+      planId: 'plan',
+      expectedOwnerRevision: 1,
+      replaceCurrent: true,
+    });
+    expect(within(dialog).getByRole('button', { name: '取消' })).toBeDisabled();
+    await act(async () => pending.resolve(active('awaiting_evidence')));
+    expect(screen.getByRole('contentinfo', { name: '影视播放控制' })).toBeVisible();
+    expect(screen.getByText('等待电视播放反馈')).toBeVisible();
+    expect(app.calls('start_video_play')).toHaveLength(1);
+  });
+
+  it('keeps unknown output honest and disables unsupported seek without touching music', async () => {
+    const app = setup({ video: active('remote_state_unknown') });
+    await app.ready();
+    await app.open();
+    expect(screen.getByText(/原文件：尚未收到读取请求/)).toBeVisible();
+    expect(screen.getByRole('button', { name: '暂停影片' })).toBeDisabled();
+    expect(screen.getByRole('slider', { name: '播放进度' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: '音乐' }));
+    await settle();
+    expect(screen.getByRole('button', { name: '播放全部' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /已连接 客厅小爱/ })).toBeDisabled();
+    expect(screen.getByRole('contentinfo', { name: '影视播放控制' })).toBeVisible();
+    expect(app.calls('control')).toHaveLength(0);
+  });
+
+  it('returns to music only through the explicit desktop handoff command', async () => {
+    const app = setup({ video: active() });
+    await app.ready();
+    fireEvent.click(screen.getByRole('button', { name: '切换到音乐并播放 原来的歌曲' }));
+    await settle();
+    expect(app.calls('start_music_play')).toHaveLength(0);
+    const dialog = screen.getByRole('dialog', { name: '切换回音乐' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '停止当前内容并播放音乐' }));
+    await settle();
+    expect(app.calls('start_music_play')[0][1]).toEqual({
+      trackId: 'song',
+      deviceId: 'speaker',
+      expectedOwnerRevision: 2,
+      replaceCurrent: true,
+    });
+    expect(app.calls('play_track')).toHaveLength(0);
+    expect(screen.queryByRole('dialog', { name: '切换回音乐' })).toBeNull();
+  });
+
+  it('keeps a failed start visible inside the handoff dialog and does not claim recovery', async () => {
+    const app = setup({
+      video: initialVideo({ entry }),
+      operation: (command) => {
+        if (command === 'start_video_play') throw new Error('电视状态待确认，请先停止。');
+      },
+    });
+    await app.ready();
+    await app.open();
+    await chooseTelevision();
+    fireEvent.click(screen.getByRole('button', { name: '检查并准备' }));
+    await settle();
+    fireEvent.click(screen.getByRole('button', { name: '切换并播放影片' }));
+    await settle();
+    const dialog = screen.getByRole('dialog', { name: '切换到影片' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '停止当前内容并播放' }));
+    await settle();
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('电视状态待确认');
+    expect(app.calls('start_video_play')).toHaveLength(1);
+    expect(app.calls('play_track')).toHaveLength(0);
+  });
+
+  it('rejects stale video polls that began before picking a new file', async () => {
+    const app = setup();
+    await app.ready();
+    await app.open();
+    const stale = app.pauseVideoRead();
+    await app.tick();
+    fireEvent.click(screen.getByRole('button', { name: '选择影片' }));
+    await settle();
+    expect(screen.getByText(entry.title)).toBeVisible();
+    await act(async () => stale.resolve(initialVideo()));
+    expect(screen.getByText(entry.title)).toBeVisible();
+    expect(app.calls('pick_video_file')).toHaveLength(1);
+  });
+});

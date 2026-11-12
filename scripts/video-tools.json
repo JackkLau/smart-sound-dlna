@@ -1,0 +1,29 @@
+{
+  "installer": { "name": "@ffprobe-installer/ffprobe", "version": "2.1.2" },
+  "targets": {
+    "aarch64-apple-darwin": {
+      "platform": "darwin",
+      "arch": "arm64",
+      "package": "@ffprobe-installer/darwin-arm64",
+      "version": "5.0.1",
+      "file": "ffprobe",
+      "sha256": "c846d5db9d3b5bc33f987725e21f3ea14953931221c191575918e907ad6c18ff"
+    },
+    "x86_64-apple-darwin": {
+      "platform": "darwin",
+      "arch": "x64",
+      "package": "@ffprobe-installer/darwin-x64",
+      "version": "5.1.0",
+      "file": "ffprobe",
+      "sha256": "424ce5e9271085240e90bd27f9e3f0ce280d388ea4379a211f76b64fcc07ce33"
+    },
+    "x86_64-pc-windows-msvc": {
+      "platform": "win32",
+      "arch": "x64",
+      "package": "@ffprobe-installer/win32-x64",
+      "version": "5.1.0",
+      "file": "ffprobe.exe",
+      "sha256": "f28c4751e7367205267025aaf0fcfc921e34d9b7edaa46bd9c8abaf367fc9051"
+    }
+  }
+}

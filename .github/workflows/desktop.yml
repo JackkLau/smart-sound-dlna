@@ -23,11 +23,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check:ui
+      - run: npm run typecheck
       - run: npm run fmt:ui
       - run: npm run test:ui
       - run: npm run build:ui
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
+      - run: npm run test:browser:video
 
   desktop:
     needs: frontend

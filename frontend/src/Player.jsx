@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Icon, Select } from './components.jsx';
 import { formatTime } from './utils.js';
 
-function Range({ id, value, max, disabled, onCommit, time = false }) {
+export function Range({ id, value, max, disabled, onCommit, time = false }) {
   const [draft, setDraft] = useState(value ?? 30);
   const [focused, setFocused] = useState(false);
   const focusRef = useRef(false);

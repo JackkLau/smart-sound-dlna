@@ -1,5 +1,5 @@
 use crate::{
-    engine::{Engine, Snapshot},
+    engine::{Engine, Snapshot, VideoSnapshot},
     library::{self, ImportSummary},
     login::{self, Attempt, LoginFlow, LoginStatus, Phase},
     session_cache::SessionCache,
@@ -104,15 +104,119 @@ struct Config {
     formats: Vec<String>,
     max_tracks: usize,
     platform: &'static str,
+    video_casting_enabled: bool,
 }
 
 #[tauri::command]
-fn get_config() -> Config {
-    Config {
+async fn get_config(state: State<'_, AppState>) -> Result<Config, String> {
+    Ok(Config {
         formats: library::formats(),
         max_tracks: 20_000,
         platform: std::env::consts::OS,
+        video_casting_enabled: state.engine.video_enabled().await,
+    })
+}
+
+#[tauri::command]
+async fn get_video_state(state: State<'_, AppState>) -> Result<VideoSnapshot, String> {
+    Ok(state.engine.video_state().await)
+}
+
+#[tauri::command]
+async fn pick_video_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<VideoSnapshot>, String> {
+    if !state.engine.video_enabled().await {
+        return Err("影视试用功能尚未开启。".into());
     }
+    let ffprobe = crate::video_tools::ffprobe_path()?;
+    if state.picker_busy.swap(true, Ordering::AcqRel) {
+        return Err("请先完成已打开的文件选择窗口。".into());
+    }
+    let guard = PickerGuard(state.picker_busy.clone());
+    let path = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        app.dialog()
+            .file()
+            .set_title("选择本地影片")
+            .add_filter("影视文件", &["mkv", "mp4", "m2ts"])
+            .blocking_pick_file()
+            .map(|file| {
+                file.into_path()
+                    .map_err(|error| format!("文件路径无法读取：{error}"))
+            })
+            .transpose()
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    match path {
+        Some(path) => state.engine.import_video(path, ffprobe).await.map(Some),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+async fn cancel_video_probe(
+    task_id: String,
+    state: State<'_, AppState>,
+) -> Result<VideoSnapshot, String> {
+    state.engine.cancel_video_probe(&task_id).await
+}
+
+#[tauri::command]
+async fn prepare_video_play(
+    media_id: String,
+    device_id: String,
+    state: State<'_, AppState>,
+) -> Result<VideoSnapshot, String> {
+    state.engine.prepare_video_play(&media_id, &device_id).await
+}
+
+#[tauri::command]
+async fn start_video_play(
+    plan_id: String,
+    expected_owner_revision: u64,
+    replace_current: bool,
+    state: State<'_, AppState>,
+) -> Result<VideoSnapshot, String> {
+    state
+        .engine
+        .start_video_play(&plan_id, expected_owner_revision, replace_current)
+        .await
+}
+
+#[tauri::command]
+async fn control_video(
+    session_id: String,
+    expected_generation: u64,
+    action: String,
+    position_ms: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<VideoSnapshot, String> {
+    state
+        .engine
+        .control_video(&session_id, expected_generation, &action, position_ms)
+        .await
+}
+
+#[tauri::command]
+async fn start_music_play(
+    track_id: String,
+    device_id: String,
+    expected_owner_revision: u64,
+    replace_current: bool,
+    state: State<'_, AppState>,
+) -> Result<Snapshot, String> {
+    state
+        .engine
+        .start_music_play(
+            &track_id,
+            &device_id,
+            expected_owner_revision,
+            replace_current,
+        )
+        .await
 }
 
 struct PickerGuard(Arc<AtomicBool>);
@@ -188,6 +292,13 @@ pub fn run() {
     let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
         get_state,
         get_config,
+        get_video_state,
+        pick_video_file,
+        cancel_video_probe,
+        prepare_video_play,
+        start_video_play,
+        control_video,
+        start_music_play,
         discover_devices,
         add_device,
         select_device,

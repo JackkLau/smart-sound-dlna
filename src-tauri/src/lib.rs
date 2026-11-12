@@ -10,6 +10,9 @@ pub mod mobile;
 mod mobile_pairing;
 mod online;
 mod track_names;
+pub mod video;
+#[cfg(feature = "desktop")]
+mod video_tools;
 pub mod voice;
 
 #[cfg(feature = "desktop")]

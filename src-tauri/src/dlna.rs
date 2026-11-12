@@ -860,9 +860,212 @@ pub struct Controller {
     device: Device,
 }
 
+#[derive(Clone, Debug)]
+pub struct VideoDescriptor {
+    pub uri: String,
+    pub title: String,
+    pub mime: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct VideoCapabilities {
+    /// Action declarations, not proof that the current file supports the action.
+    pub can_pause: bool,
+    pub can_seek: bool,
+    pub reason: Option<String>,
+    pub actions: Vec<String>,
+    pub sink_protocol_info: Vec<String>,
+}
+
+struct VideoServiceUrls {
+    transport_scpd: Option<String>,
+    connection: Option<(String, String)>,
+}
+
+fn video_service_urls(text: &str, device: &Device) -> Result<VideoServiceUrls, String> {
+    let document = parse_xml(text)?;
+    let root = document.root_element();
+    let location = parse_http_url(&device.location)?;
+    let url_base = child_text(root, "URLBase");
+    let base = if url_base.is_empty() {
+        location
+    } else {
+        location
+            .join(&url_base)
+            .map_err(|_| "电视 URLBase 无效。")?
+    };
+    for node in root
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "device")
+    {
+        let services: Vec<_> = node
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "serviceList")
+            .flat_map(|n| {
+                n.children()
+                    .filter(|s| s.is_element() && s.tag_name().name() == "service")
+            })
+            .collect();
+        let matching = services.iter().find(|service| {
+            child_text(**service, "serviceType") == device.av_transport_type
+                && base
+                    .join(&child_text(**service, "controlURL"))
+                    .ok()
+                    .is_some_and(|url| url.as_str() == device.av_transport_url)
+        });
+        let Some(transport) = matching else {
+            continue;
+        };
+        let scpd = child_text(*transport, "SCPDURL");
+        let transport_scpd = if scpd.is_empty() {
+            None
+        } else {
+            let url = base.join(&scpd).map_err(|_| "电视动作描述地址无效。")?;
+            parse_http_url(url.as_str())?;
+            Some(url.to_string())
+        };
+        let mut connection = None;
+        for service in services {
+            let kind = child_text(service, "serviceType");
+            if service_version(&kind, "ConnectionManager").is_some() {
+                let control = child_text(service, "controlURL");
+                if !control.is_empty() {
+                    let url = base.join(&control).map_err(|_| "电视格式声明地址无效。")?;
+                    parse_http_url(url.as_str())?;
+                    connection = Some((url.to_string(), kind));
+                }
+            }
+        }
+        return Ok(VideoServiceUrls {
+            transport_scpd,
+            connection,
+        });
+    }
+    Err("设备描述已变化，请重新搜索电视。".into())
+}
+
+fn video_didl_metadata(descriptor: &VideoDescriptor) -> Result<String, String> {
+    if !["video/mp4", "video/x-matroska", "video/mp2t"].contains(&descriptor.mime.as_str()) {
+        return Err("视频 MIME 类型无效。".into());
+    }
+    if descriptor.title.chars().any(|c| {
+        (c < '\u{20}' && !matches!(c, '\t' | '\r' | '\n')) || matches!(c, '\u{fffe}' | '\u{ffff}')
+    }) {
+        return Err("影片标题包含无法发送给电视的控制字符。".into());
+    }
+    Ok(format!("<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\"><item id=\"0\" parentID=\"-1\" restricted=\"1\"><dc:title>{}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo=\"http-get:*:{}:*\">{}</res></item></DIDL-Lite>", xml_escape(&descriptor.title), xml_escape(&descriptor.mime), xml_escape(&descriptor.uri)))
+}
+
+impl VideoDescriptor {
+    /// Pure local checks must run before handing off an existing playback owner.
+    pub fn validate(&self) -> Result<(), String> {
+        parse_http_url(&self.uri)?;
+        video_didl_metadata(self)?;
+        Ok(())
+    }
+}
+
 impl Controller {
     pub fn new(device: Device) -> Self {
         Self { device }
+    }
+
+    /// Read-only capability discovery. Missing optional declarations remain unknown.
+    pub async fn read_video_capabilities(&self) -> Result<VideoCapabilities, String> {
+        let interface = self
+            .device
+            .interface_ip
+            .as_deref()
+            .and_then(|ip| ip.parse().ok());
+        let (status, description) =
+            request_xml(&self.device.location, interface, Method::GET, None, None).await?;
+        if status != 200 {
+            return Err(format!("获取电视描述失败：HTTP {status}。"));
+        }
+        let services = video_service_urls(&description, &self.device)?;
+        let mut capabilities = VideoCapabilities::default();
+        let mut warnings = Vec::new();
+        if let Some(url) = services.transport_scpd {
+            match request_xml(&url, interface, Method::GET, None, None).await {
+                Ok((200, text)) => match parse_xml(&text) {
+                    Ok(document) => {
+                        capabilities.actions = document
+                            .descendants()
+                            .filter(|n| n.is_element() && n.tag_name().name() == "action")
+                            .map(|n| child_text(n, "name"))
+                            .filter(|name| !name.is_empty())
+                            .take(256)
+                            .collect();
+                        capabilities.can_pause = capabilities.actions.iter().any(|a| a == "Pause");
+                        capabilities.can_seek = capabilities.actions.iter().any(|a| a == "Seek");
+                    }
+                    Err(_) => warnings.push("电视动作描述无法解析。"),
+                },
+                _ => warnings.push("电视动作声明暂不可读取。"),
+            }
+        } else {
+            warnings.push("电视未提供动作声明，控制能力尚未验证。");
+        }
+        if let Some((url, service)) = services.connection {
+            let action = "GetProtocolInfo";
+            let body = format!("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:{action} xmlns:u=\"{}\"/></s:Body></s:Envelope>", xml_escape(&service));
+            let soap_action = format!("\"{service}#{action}\"");
+            match request_xml(
+                &url,
+                interface,
+                Method::POST,
+                Some(&soap_action),
+                Some(body),
+            )
+            .await
+            {
+                Ok((status, text)) => match soap_values(action, status, &text) {
+                    Ok(values) => {
+                        capabilities.sink_protocol_info = values
+                            .get("Sink")
+                            .map(|sink| {
+                                sink.split(',')
+                                    .map(str::trim)
+                                    .filter(|s| !s.is_empty())
+                                    .take(256)
+                                    .map(|s| s.chars().take(512).collect())
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    }
+                    Err(_) => warnings.push("电视未返回可用的格式声明。"),
+                },
+                Err(_) => warnings.push("电视格式声明暂不可读取。"),
+            }
+        } else {
+            warnings.push("电视未提供格式声明，原文件需试播验证。");
+        }
+        if !warnings.is_empty() {
+            capabilities.reason = Some(warnings.join(""));
+        }
+        Ok(capabilities)
+    }
+
+    /// Only SetAVTransportURI. The coordinator owns Stop and failure recovery.
+    pub async fn set_video_uri(&self, descriptor: &VideoDescriptor) -> Result<(), String> {
+        let metadata = video_didl_metadata(descriptor)?;
+        resolve_target(&descriptor.uri).await?;
+        self.soap(
+            "SetAVTransportURI",
+            &[
+                ("CurrentURI", descriptor.uri.clone()),
+                ("CurrentURIMetaData", metadata),
+            ],
+            false,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| error.message)
+    }
+
+    /// No hidden Stop or music-specific SetPlayMode operation.
+    pub async fn start_video(&self) -> Result<(), String> {
+        self.resume().await
     }
 
     async fn soap(
@@ -1142,6 +1345,7 @@ mod tests {
     #[derive(Default)]
     struct MockState {
         description: String,
+        video_scpd: Option<String>,
         actions: Vec<(String, String, String)>,
         requests: Vec<(String, String)>,
         fail_actions: HashMap<String, u16>,
@@ -1248,6 +1452,11 @@ mod tests {
             state.requests.push((path.clone(), header("Host")));
             if headers.starts_with("GET ") {
                 match path.as_str() {
+                    "/video-actions.xml" => (
+                        200,
+                        String::new(),
+                        state.video_scpd.clone().unwrap_or_default(),
+                    ),
                     "/redirect.xml" => (
                         302,
                         "Location: http://8.8.8.8/device.xml\r\n".to_string(),
@@ -1278,6 +1487,7 @@ mod tests {
                         "GetTransportInfo" => state.transport_response.as_deref().unwrap_or("<u:CurrentTransportState>PLAYING</u:CurrentTransportState>"),
                         "GetPositionInfo" => state.position_response.as_deref().unwrap_or("<u:TrackDuration>01:02:03.4</u:TrackDuration><u:RelTime>00:01:23</u:RelTime><u:TrackURI>http://127.0.0.1/music.mp3?x=1&amp;y=2</u:TrackURI>"),
                         "GetVolume" => "<u:CurrentVolume>28</u:CurrentVolume>",
+                        "GetProtocolInfo" => "<u:Source></u:Source><u:Sink>http-get:*:video/mp4:*,http-get:*:video/x-matroska:*</u:Sink>",
                         _ => "",
                     };
                     let service = if action.ends_with("Volume") { RCS } else { AVT };
@@ -1612,6 +1822,72 @@ mod tests {
             .unwrap();
         assert_eq!(volume.1, "/rendering");
         assert_eq!(action_arguments(&volume.2)["DesiredVolume"], "42");
+    }
+
+    #[tokio::test]
+    async fn video_start_steps_do_not_hide_stop_or_music_play_mode() {
+        let renderer = MockRenderer::start().await;
+        let controller = Controller::new(renderer.device().await);
+        let descriptor = VideoDescriptor {
+            uri: format!("{}/video/token/a.mkv?x=1&y=2", renderer.base),
+            title: "影片 <中文> & \"原盘\"".into(),
+            mime: "video/x-matroska".into(),
+        };
+        controller.set_video_uri(&descriptor).await.unwrap();
+        controller.start_video().await.unwrap();
+        let state = renderer.state.lock().unwrap();
+        assert_eq!(
+            state
+                .actions
+                .iter()
+                .map(|a| a.0.as_str())
+                .collect::<Vec<_>>(),
+            ["SetAVTransportURI", "Play"]
+        );
+        let arguments = action_arguments(&state.actions[0].2);
+        assert_eq!(arguments["CurrentURI"], descriptor.uri);
+        let metadata = parse_xml(&arguments["CurrentURIMetaData"]).unwrap();
+        let item = metadata
+            .descendants()
+            .find(|n| n.is_element() && n.tag_name().name() == "item")
+            .unwrap();
+        assert_eq!(child_text(item, "title"), descriptor.title);
+        assert_eq!(child_text(item, "class"), "object.item.videoItem");
+        assert!(!arguments["CurrentURIMetaData"].contains("musicTrack"));
+        let mut bad = descriptor;
+        bad.mime = "audio/mpeg".into();
+        assert!(video_didl_metadata(&bad).is_err());
+    }
+
+    #[tokio::test]
+    async fn video_capabilities_are_read_only_and_optional_declarations_stay_unknown() {
+        let renderer = MockRenderer::start().await;
+        let controller = Controller::new(renderer.device().await);
+        let unknown = controller.read_video_capabilities().await.unwrap();
+        assert!(!unknown.can_pause && !unknown.can_seek);
+        assert!(unknown.reason.is_some());
+        assert!(renderer.state.lock().unwrap().actions.is_empty());
+        {
+            let mut state = renderer.state.lock().unwrap();
+            state.description = state.description.replace("<controlURL>transport</controlURL>", "<controlURL>transport</controlURL><SCPDURL>/video-actions.xml</SCPDURL>")
+                .replace("<serviceType>urn:schemas-upnp-org:service:RenderingControl:1</serviceType><controlURL>/rendering</controlURL></service>", "<serviceType>urn:schemas-upnp-org:service:RenderingControl:1</serviceType><controlURL>/rendering</controlURL></service><service><serviceType>urn:schemas-upnp-org:service:ConnectionManager:1</serviceType><controlURL>/connection</controlURL></service>");
+            state.video_scpd = Some("<scpd><actionList><action><name>Play</name></action><action><name>SetAVTransportURI</name></action><action><name>Pause</name></action><action><name>Seek</name></action></actionList></scpd>".into());
+        }
+        let declared = controller.read_video_capabilities().await.unwrap();
+        assert!(declared.can_pause && declared.can_seek);
+        assert_eq!(declared.sink_protocol_info.len(), 2);
+        assert!(declared.reason.is_none());
+        let state = renderer.state.lock().unwrap();
+        assert_eq!(
+            state
+                .actions
+                .iter()
+                .map(|a| a.0.as_str())
+                .collect::<Vec<_>>(),
+            ["GetProtocolInfo"]
+        );
+        assert_eq!(state.actions[0].1, "/connection");
+        assert!(!state.actions[0].2.contains("InstanceID"));
     }
 
     #[tokio::test]

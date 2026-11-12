@@ -1,14 +1,19 @@
 //! LAN media endpoint. Control commands are available only through Tauri IPC.
 
 use crate::library::{mime, Library, Track};
+use crate::video::VideoSource;
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, Method, Response, StatusCode};
 use axum::routing::get;
 use axum::Router;
 use futures_util::StreamExt;
+use std::collections::HashMap;
 use std::io::SeekFrom;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 use tokio_util::sync::CancellationToken;
@@ -18,15 +23,90 @@ struct MediaState {
     library: Arc<Mutex<Library>>,
     token: String,
     shutdown: CancellationToken,
+    videos: Arc<Mutex<HashMap<String, VideoRegistration>>>,
+}
+
+#[derive(Clone, Debug)]
+struct VideoRegistration {
+    source: VideoSource,
+    cancellation: CancellationToken,
+    requested: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VideoGrant {
+    pub id: String,
+    pub url: String,
 }
 
 #[derive(Clone, Debug)]
 pub struct MediaServer {
     pub port: u16,
     pub token: String,
+    videos: Arc<Mutex<HashMap<String, VideoRegistration>>>,
+    shutdown: CancellationToken,
 }
 
 impl MediaServer {
+    /// Caller validates the source off the async worker before registering it.
+    /// Each HTTP request validates the opened file again; no path comes from the URL.
+    pub fn register_video(&self, host: &str, source: VideoSource) -> Result<VideoGrant, String> {
+        let address = host
+            .trim_matches(['[', ']'])
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| "视频服务地址无效。")?;
+        if address.is_unspecified() || address.is_multicast() || self.shutdown.is_cancelled() {
+            return Err("视频服务地址不可用。".into());
+        }
+        if crate::video::mime(&source.info.format) == "application/octet-stream"
+            || uuid::Uuid::parse_str(&source.info.id).is_err()
+        {
+            return Err("视频资源信息无效。".into());
+        }
+        let id = format!(
+            "{}{}",
+            uuid::Uuid::new_v4().simple(),
+            uuid::Uuid::new_v4().simple()
+        );
+        let authority = match address {
+            std::net::IpAddr::V4(ip) => ip.to_string(),
+            std::net::IpAddr::V6(ip) => format!("[{ip}]"),
+        };
+        let url = format!(
+            "http://{authority}:{}/video/{id}/{}.{}",
+            self.port, source.info.id, source.info.format
+        );
+        self.videos
+            .lock()
+            .map_err(|_| "视频资源登记暂不可用。")?
+            .insert(
+                id.clone(),
+                VideoRegistration {
+                    source,
+                    cancellation: self.shutdown.child_token(),
+                    requested: Arc::new(AtomicBool::new(false)),
+                },
+            );
+        Ok(VideoGrant { id, url })
+    }
+
+    pub fn revoke_video(&self, id: &str) {
+        if let Ok(mut videos) = self.videos.lock() {
+            if let Some(registration) = videos.remove(id) {
+                registration.cancellation.cancel();
+            }
+        }
+    }
+
+    /// Evidence of an authorized GET, not evidence that a decoder displayed a frame.
+    pub fn video_evidence(&self, id: &str) -> bool {
+        self.videos
+            .lock()
+            .ok()
+            .and_then(|videos| videos.get(id).map(|r| r.requested.load(Ordering::Acquire)))
+            .unwrap_or(false)
+    }
+
     pub fn url(&self, host: &str, track: &Track) -> String {
         let host = if host.contains(':') && !host.starts_with('[') {
             format!("[{host}]")
@@ -56,17 +136,24 @@ pub async fn start(
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     );
+    let videos = Arc::new(Mutex::new(HashMap::new()));
     let state = MediaState {
         library,
         token: token.clone(),
         shutdown: shutdown.clone(),
+        videos: videos.clone(),
     };
     let router = Router::new()
         .route(
             "/media/{token}/{filename}",
             get(serve_media).head(serve_media),
         )
+        .route(
+            "/video/{token}/{filename}",
+            get(serve_video).head(serve_video),
+        )
         .with_state(state);
+    let server_shutdown = shutdown.clone();
     tokio::spawn(async move {
         // Active body streams observe the same token, releasing open files
         // before graceful shutdown waits for their connections to finish.
@@ -74,7 +161,127 @@ pub async fn start(
             .with_graceful_shutdown(shutdown.cancelled_owned())
             .await;
     });
-    Ok(MediaServer { port, token })
+    Ok(MediaServer {
+        port,
+        token,
+        videos,
+        shutdown: server_shutdown,
+    })
+}
+
+async fn serve_video(
+    State(state): State<MediaState>,
+    Path((token, filename)): Path<(String, String)>,
+    method: Method,
+    headers: HeaderMap,
+) -> Response<Body> {
+    let registration = state
+        .videos
+        .lock()
+        .ok()
+        .and_then(|videos| videos.get(&token).cloned());
+    let Some(registration) = registration else {
+        return empty_response(StatusCode::NOT_FOUND);
+    };
+    if registration.cancellation.is_cancelled()
+        || filename
+            != format!(
+                "{}.{}",
+                registration.source.info.id, registration.source.info.format
+            )
+    {
+        return empty_response(StatusCode::NOT_FOUND);
+    }
+    let source = registration.source.clone();
+    let file = match tokio::task::spawn_blocking(move || source.open()).await {
+        Ok(Ok(file)) => file,
+        _ => return empty_response(StatusCode::NOT_FOUND),
+    };
+    if registration.cancellation.is_cancelled() {
+        return empty_response(StatusCode::NOT_FOUND);
+    }
+    let size = registration.source.length();
+    // This route supplies no strong validator. If-Range therefore always falls
+    // back to the complete representation, as required for unmatched validators.
+    let requested = if method == Method::HEAD
+        || headers.contains_key(header::IF_RANGE)
+        || headers.get_all(header::RANGE).iter().count() > 1
+    {
+        None
+    } else {
+        headers
+            .get(header::RANGE)
+            .and_then(|value| value.to_str().ok())
+    };
+    let requested = requested.filter(|value| value.starts_with("bytes=") && !value.contains(','));
+    let selected = match parse_range(requested, size) {
+        Ok(value) => value,
+        Err(()) => {
+            return video_response(
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                &registration.source.info.format,
+                0,
+                Some(format!("bytes */{size}")),
+                Body::empty(),
+            )
+        }
+    };
+    let (start, length, status, range) = match selected {
+        Some((start, end)) => (
+            start,
+            end - start + 1,
+            StatusCode::PARTIAL_CONTENT,
+            Some(format!("bytes {start}-{end}/{size}")),
+        ),
+        None => (0, size, StatusCode::OK, None),
+    };
+    if method == Method::HEAD {
+        return video_response(
+            status,
+            &registration.source.info.format,
+            length,
+            range,
+            Body::empty(),
+        );
+    }
+    let mut file = tokio::fs::File::from_std(file);
+    if file.seek(SeekFrom::Start(start)).await.is_err() {
+        return empty_response(StatusCode::NOT_FOUND);
+    }
+    registration.requested.store(true, Ordering::Release);
+    let stream = ReaderStream::with_capacity(file.take(length), 64 * 1024)
+        .take_until(registration.cancellation.cancelled_owned());
+    video_response(
+        status,
+        &registration.source.info.format,
+        length,
+        range,
+        Body::from_stream(stream),
+    )
+}
+
+fn video_response(
+    status: StatusCode,
+    format: &str,
+    length: u64,
+    range: Option<String>,
+    body: Body,
+) -> Response<Body> {
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, crate::video::mime(format))
+        .header(header::CONTENT_LENGTH, length)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "private, no-store")
+        .header("x-content-type-options", "nosniff")
+        .header("transferMode.dlna.org", "Streaming")
+        .header("contentFeatures.dlna.org", "DLNA.ORG_OP=01;DLNA.ORG_CI=0");
+    if let Some(range) = range {
+        builder = builder.header(header::CONTENT_RANGE, range);
+    }
+    builder
+        .body(body)
+        .unwrap_or_else(|_| empty_response(StatusCode::INTERNAL_SERVER_ERROR))
 }
 
 fn token_matches(actual: &str, expected: &str) -> bool {
@@ -250,6 +457,38 @@ mod tests {
     use std::collections::HashMap;
     use tokio::io::AsyncWriteExt;
 
+    fn sparse_file(path: &std::path::Path, length: u64) -> std::fs::File {
+        let file = std::fs::File::create(path).unwrap();
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::System::{Ioctl::FSCTL_SET_SPARSE, IO::DeviceIoControl};
+            let mut returned = 0;
+            // The test owns this ordinary file. Mark it sparse before extending
+            // it so the >4 GiB offset tests do not allocate gigabytes on NTFS.
+            let ok = unsafe {
+                DeviceIoControl(
+                    file.as_raw_handle(),
+                    FSCTL_SET_SPARSE,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut returned,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_ne!(
+                ok,
+                0,
+                "cannot create sparse test file: {}",
+                std::io::Error::last_os_error()
+            );
+        }
+        file.set_len(length).unwrap();
+        file
+    }
+
     struct Fixture {
         _directory: tempfile::TempDir,
         library: Arc<Mutex<Library>>,
@@ -350,6 +589,134 @@ mod tests {
         }
         assert_eq!(parse_range(Some("bytes=0-"), 0), Err(()));
         assert_eq!(parse_range(Some("bytes=-99"), 16), Ok(Some((0, 15))));
+    }
+
+    #[tokio::test]
+    async fn video_http_bytes_head_and_revocation_are_independent_of_music() {
+        let fixture = fixture(b"music").await;
+        let path = fixture._directory.path().join("电影.mkv");
+        std::fs::write(&path, b"0123456789abcdef").unwrap();
+        let source = crate::video::VideoSource::open_import(path.clone()).unwrap();
+        let grant = fixture.server.register_video("127.0.0.1", source).unwrap();
+        let video_path = url::Url::parse(&grant.url).unwrap().path().to_owned();
+        let (status, headers, body) = fixture
+            .request("GET", &video_path, "Range: bytes=2-5\r\n")
+            .await;
+        assert_eq!((status, body), (206, b"2345".to_vec()));
+        assert_eq!(headers["content-type"], "video/x-matroska");
+        assert!(fixture.server.video_evidence(&grant.id));
+        let (status, headers, body) = fixture
+            .request("HEAD", &video_path, "Range: bytes=2-5\r\n")
+            .await;
+        assert_eq!(
+            (status, body.len(), headers["content-length"].as_str()),
+            (200, 0, "16")
+        );
+        for range in ["bytes=0-1,4-5", "items=1-2"] {
+            let (status, _, body) = fixture
+                .request("GET", &video_path, &format!("Range: {range}\r\n"))
+                .await;
+            assert_eq!((status, body), (200, b"0123456789abcdef".to_vec()));
+        }
+        let (status, headers, _) = fixture
+            .request("GET", &video_path, "Range: bytes=16-\r\n")
+            .await;
+        assert_eq!(status, 416);
+        assert_eq!(headers["content-range"], "bytes */16");
+        let (status, _, body) = fixture
+            .request(
+                "GET",
+                &video_path,
+                "Range: bytes=2-5\r\nIf-Range: \"unknown\"\r\n",
+            )
+            .await;
+        assert_eq!((status, body), (200, b"0123456789abcdef".to_vec()));
+        fixture.server.revoke_video(&grant.id);
+        assert_eq!(fixture.request("GET", &video_path, "").await.0, 404);
+        assert_eq!(
+            fixture.request("GET", &fixture.path(), "").await.2,
+            b"music"
+        );
+        let replacement = fixture
+            .server
+            .register_video(
+                "127.0.0.1",
+                crate::video::VideoSource::open_import(path.clone()).unwrap(),
+            )
+            .unwrap();
+        std::fs::rename(&path, path.with_extension("old")).unwrap();
+        std::fs::write(&path, b"private").unwrap();
+        assert_eq!(
+            fixture
+                .request("GET", url::Url::parse(&replacement.url).unwrap().path(), "")
+                .await
+                .0,
+            404
+        );
+    }
+
+    #[tokio::test]
+    async fn video_http_reads_bytes_beyond_four_gib_without_buffering_file() {
+        use std::io::{Seek, Write};
+        let fixture = fixture(b"music").await;
+        let path = fixture._directory.path().join("large.mkv");
+        let offset = (1u64 << 32) + 7;
+        let mut file = sparse_file(&path, offset + 8);
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        file.write_all(b"TAILBYTE").unwrap();
+        drop(file);
+        let grant = fixture
+            .server
+            .register_video(
+                "127.0.0.1",
+                crate::video::VideoSource::open_import(path).unwrap(),
+            )
+            .unwrap();
+        let url = url::Url::parse(&grant.url).unwrap();
+        let (status, headers, body) = fixture
+            .request("GET", url.path(), &format!("Range: bytes={offset}-\r\n"))
+            .await;
+        assert_eq!((status, body), (206, b"TAILBYTE".to_vec()));
+        assert_eq!(
+            headers["content-range"],
+            format!("bytes {offset}-{}/{total}", offset + 7, total = offset + 8)
+        );
+        assert_eq!(headers["content-length"], "8");
+    }
+
+    #[tokio::test]
+    async fn revoking_video_cancels_an_active_large_response() {
+        let fixture = fixture(b"music").await;
+        let path = fixture._directory.path().join("stream.mkv");
+        let length = 1u64 << 33;
+        let file = sparse_file(&path, length);
+        drop(file);
+        let grant = fixture
+            .server
+            .register_video(
+                "127.0.0.1",
+                crate::video::VideoSource::open_import(path).unwrap(),
+            )
+            .unwrap();
+        let response = reqwest::Client::new().get(&grant.url).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut stream = response.bytes_stream();
+        let first = stream.next().await.unwrap().unwrap();
+        assert!(!first.is_empty());
+        fixture.server.revoke_video(&grant.id);
+        let total = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut total = first.len() as u64;
+            while let Some(Ok(chunk)) = stream.next().await {
+                total += chunk.len() as u64;
+            }
+            total
+        })
+        .await
+        .unwrap();
+        assert!(
+            total < length,
+            "revoked stream must not deliver the whole source"
+        );
     }
 
     #[tokio::test]

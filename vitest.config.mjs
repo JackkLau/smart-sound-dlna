@@ -5,7 +5,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['tests/react/setup.js'],
-    include: ['tests/react/**/*.test.jsx'],
+    include: ['tests/react/**/*.test.{jsx,tsx}'],
     maxWorkers: 2,
     restoreMocks: true,
     clearMocks: true,

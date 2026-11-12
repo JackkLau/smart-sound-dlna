@@ -48,6 +48,10 @@ export function useDesktop(providedInvoke) {
     connected: false,
     state: initialState,
   });
+  const getMutationState = useCallback(
+    () => ({ generation: refs.current.generation, locked: refs.current.locked }),
+    [],
+  );
   const toastTimer = useRef(null);
   const announce = useCallback((message) => {
     clearTimeout(toastTimer.current);
@@ -251,6 +255,7 @@ export function useDesktop(providedInvoke) {
     refresh,
     connect,
     mutate,
+    getMutationState,
     invoke,
     importMusic,
     discover,

@@ -632,6 +632,11 @@ fn phone_library_projection_without_network_omits_paths_and_clamps_pages() {
         discovery_error: None,
         interfaces: vec!["secret-interface".into()],
         media_port: 9999,
+        playback_context: crate::engine::PlaybackContext {
+            active_kind: "none".into(),
+            owner_revision: 0,
+            music_control_blocked_reason: None,
+        },
     };
     let data = phone_library(
         &snapshot,

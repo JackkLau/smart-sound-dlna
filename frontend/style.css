@@ -30,6 +30,56 @@
   --page-max: 1400px;
   --track-actions-width: 126px;
 }
+
+/* Video casting shares the desktop controls and document scroll owner. */
+.media-navigation { display: flex; gap: 8px; max-width: var(--page-max); margin: 0 auto 12px; padding: 0 var(--space-page); }
+.media-navigation .button { min-width: 84px; }
+.media-navigation .button[aria-pressed="true"] { background: var(--color-tint); border-color: var(--color-primary); color: var(--color-primary); }
+.video-workspace { max-width: var(--page-max); margin: 0 auto; padding: 8px var(--space-page) 20px; }
+.video-workspace h1 { font-family: var(--font-display); font-size: 30px; line-height: 1.35; margin: 4px 0 8px; }
+.video-workspace h2 { font-size: 18px; }
+.video-workspace h3 { font-size: 15px; }
+.video-columns { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr); gap: 20px; }
+.video-source, .video-target, .video-evidence { background: var(--color-surface); border: 1px solid var(--color-line); border-radius: var(--radius-panel); padding: 20px; min-width: 0; }
+.video-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.video-empty { min-height: 220px; display: flex; align-items: flex-start; flex-direction: column; justify-content: center; gap: 12px; color: var(--color-muted); }
+.video-empty > .icon { width: 32px; height: 32px; }
+.video-empty h3 { color: var(--color-ink); }
+.video-file-summary > strong { display: block; font-size: 18px; overflow-wrap: anywhere; }
+.video-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+.video-facts dt { color: var(--color-muted); font-size: 12px; }
+.video-facts dd { margin: 4px 0 0; overflow-wrap: anywhere; font-family: var(--font-numeric); font-size: 12px; }
+.video-track-details { border-top: 1px solid var(--color-line); padding-top: 16px; }
+.video-track-details summary { cursor: pointer; min-height: 32px; }
+.video-track-details summary:hover { color: var(--color-primary); }
+.video-track-details h4 { margin: 12px 0 4px; }
+.video-track-details ul, .video-evidence ul { padding-left: 20px; margin: 8px 0 0; overflow-wrap: anywhere; }
+.video-target .field-label { margin-top: 18px; }
+.video-target .select-trigger { width: 100%; }
+.video-device-actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 20px; }
+.video-prepare { width: 100%; }
+.video-plan { border-top: 1px solid var(--color-line); margin-top: 20px; padding-top: 16px; display: grid; gap: 12px; }
+.video-plan .button { width: 100%; }
+.video-probe { min-height: 70px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; padding: 12px; background: var(--color-inset); border-radius: var(--radius-control); }
+.video-notice { margin-bottom: 16px; }
+.video-evidence { margin-top: 20px; }
+.video-evidence > p { margin-top: 8px; overflow-wrap: anywhere; }
+.video-player-details { display: grid; justify-items: end; gap: 4px; font-size: 11px; color: var(--color-muted); }
+.video-player .transport-buttons { gap: 8px; }
+@media (max-width: 760px) {
+  .video-columns { grid-template-columns: 1fr; }
+  .video-player { grid-template-columns: minmax(0, 1fr) auto; }
+  .video-player .transport { display: contents; }
+  .video-player .transport-buttons { grid-column: 2; grid-row: 1; }
+  .video-player .timeline, .video-player-details { grid-column: 1 / -1; }
+  .video-player-details { display: flex; justify-content: space-between; gap: 8px; }
+}
+@media (max-width: 420px) {
+  .video-source, .video-target, .video-evidence { padding: 16px; }
+  .video-section-heading { align-items: flex-start; gap: 8px; }
+  .video-facts { grid-template-columns: 1fr; gap: 12px; }
+  .video-player .transport-buttons .button { padding: 6px 8px; font-size: 11px; }
+}
 * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) var(--scroll-track); }
 *::-webkit-scrollbar { width: 10px; height: 10px; }
 *::-webkit-scrollbar-track { background: var(--scroll-track); }
