@@ -10,7 +10,16 @@ test('video packaging rejects unsupported and foreign target triples', async () 
   assert.equal(hostTarget('darwin', 'arm64'), 'aarch64-apple-darwin');
   assert.equal(hostTarget('win32', 'x64'), 'x86_64-pc-windows-msvc');
   assert.throws(() => hostTarget('win32', 'arm64'), /仅为/);
-  await assert.rejects(prepareVideoTools('/unused', 'wrong-target'), /目标平台/);
+  assert.throws(() => hostTarget('linux', 'x64'), /仅为/);
+  const supportedHost =
+    (process.platform === 'darwin' && ['arm64', 'x64'].includes(process.arch)) ||
+    (process.platform === 'win32' && process.arch === 'x64');
+  // Unsupported hosts fail before cross-target validation; both must reject
+  // before reading dependencies or creating a staged binary.
+  await assert.rejects(
+    prepareVideoTools('/unused', 'wrong-target'),
+    supportedHost ? /目标平台/ : /仅为/,
+  );
 });
 
 test('video sidecar checks exact package and bytes before staging', async () => {
