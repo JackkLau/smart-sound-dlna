@@ -137,7 +137,19 @@ function setup({
     }
     const result = await operation?.(command, args);
     if (result !== undefined) return result;
-    if (command === 'pick_video_file') data = { ...data, entry, probe: null, plan: null };
+    if (command === 'forget_recent_video')
+      data = {
+        ...data,
+        recent_videos: data.recent_videos?.filter((item) => item.id !== args.mediaId),
+      };
+    else if (command === 'select_recent_video')
+      data = {
+        ...data,
+        entry: null,
+        plan: null,
+        probe: { task_id: 'recent-probe', status: 'running', error: null },
+      };
+    else if (command === 'pick_video_file') data = { ...data, entry, probe: null, plan: null };
     else if (command === 'prepare_video_play')
       data = {
         ...data,
@@ -170,7 +182,9 @@ function setup({
       };
       data = initialVideo({ owner_revision: 3 });
       return structuredClone(audio);
-    } else if (command === 'play_track') return audio;
+    } else if (command === 'recheck_video_session') data = active();
+    else if (command === 'export_video_diagnostics') return true;
+    else if (command === 'play_track') return audio;
     else if (command === 'discover_devices') return audio;
     else throw new Error('Unexpected command: ' + command);
     return structuredClone(data);
@@ -405,5 +419,238 @@ describe('video casting keeps music boundaries intact', () => {
     await act(async () => stale.resolve(initialVideo()));
     expect(screen.getByText(entry.title)).toBeVisible();
     expect(app.calls('pick_video_file')).toHaveLength(1);
+  });
+});
+
+describe('video diagnostics and explicit connection checks', () => {
+  it('shows bounded transfer evidence without presenting it as playback progress', async () => {
+    const state = active();
+    Object.assign(state.session!, {
+      diagnostics: {
+        schema_version: 1,
+        elapsed_ms: 180000,
+        last_command: { action: 'Play', outcome: 'accepted', elapsed_ms: 45 },
+        last_poll_age_ms: 2000,
+        consecutive_poll_failures: 0,
+        state_source: 'poll',
+        transfer: {
+          get_requests: 3,
+          head_requests: 1,
+          range_requests: 2,
+          rejected_requests: 0,
+          active_streams: 1,
+          peak_active_streams: 2,
+          bytes_streamed: '8589934592',
+          last_request: {
+            method: 'GET',
+            status: 206,
+            range_start: '4294967296',
+            range_end: '4295032831',
+          },
+          revoked: false,
+        },
+      },
+    });
+    const app = setup({ video: state });
+    await app.ready();
+    await app.open();
+    fireEvent.click(screen.getByText('连接与传输诊断'));
+    expect(screen.getByText('8,589,934,592 字节')).toBeVisible();
+    expect(screen.getByText('GET 3 · HEAD 1 · Range 2')).toBeVisible();
+    expect(screen.getByText(/4294967296–4295032831/)).toBeVisible();
+    expect(screen.getByText(/不代表电视已收完或已播放/)).toBeVisible();
+    expect(app.calls('control_video')).toHaveLength(0);
+  });
+
+  it('rechecks only on request, blocks duplicates and preserves a failed check for retry', async () => {
+    const pending = deferred<VideoSnapshot>();
+    let first = true;
+    const app = setup({
+      video: active('remote_state_unknown'),
+      operation: (command) => {
+        if (command === 'recheck_video_session' && first) {
+          first = false;
+          return pending.promise;
+        }
+      },
+    });
+    await app.ready();
+    await app.open();
+    const check = screen.getByRole('button', { name: '重新检查连接' });
+    fireEvent.click(check);
+    fireEvent.click(check);
+    expect(app.calls('recheck_video_session')).toHaveLength(1);
+    expect(check).toBeDisabled();
+    await act(async () => pending.reject(new Error('REMOTE_STATE_UNKNOWN：电视尚未恢复连接。')));
+    await app.tick();
+    expect(screen.getByRole('alert')).toHaveTextContent('电视尚未恢复连接。');
+    expect(app.calls('recheck_video_session')).toHaveLength(1);
+    fireEvent.click(check);
+    await settle();
+    expect(app.calls('recheck_video_session')[1][1]).toEqual({
+      sessionId: 'session',
+      expectedGeneration: 2,
+    });
+    expect(screen.getByRole('button', { name: '暂停影片' })).toBeEnabled();
+    expect(app.calls('start_video_play')).toHaveLength(0);
+    expect(app.calls('control_video')).toHaveLength(0);
+    expect(app.calls('play_track')).toHaveLength(0);
+  });
+
+  it('treats native export cancellation honestly and never sends a destination path', async () => {
+    const pending = deferred<boolean>();
+    let first = true;
+    const app = setup({
+      video: active(),
+      operation: (command) => {
+        if (command === 'export_video_diagnostics' && first) {
+          first = false;
+          return pending.promise;
+        }
+      },
+    });
+    await app.ready();
+    await app.open();
+    const save = screen.getByRole('button', { name: '导出诊断' });
+    fireEvent.click(save);
+    fireEvent.click(save);
+    expect(app.calls('export_video_diagnostics')).toHaveLength(1);
+    expect(save).toBeDisabled();
+    expect(screen.getByRole('button', { name: '重新检查连接' })).toBeDisabled();
+    await act(async () => pending.resolve(false));
+    expect(screen.queryByText('诊断已保存。')).toBeNull();
+    expect(save).toBeEnabled();
+    expect(screen.getByRole('button', { name: '暂停影片' })).toBeEnabled();
+    fireEvent.click(save);
+    await settle();
+    expect(screen.getByText('诊断已保存。')).toBeVisible();
+    expect(app.calls('export_video_diagnostics')[1][1]).toEqual({
+      sessionId: 'session',
+      expectedGeneration: 2,
+    });
+    expect(app.calls('control_video')).toHaveLength(0);
+  });
+
+  it('exports a stopped session but cannot recheck its stale playback ownership', async () => {
+    const state = active('stopped');
+    state.owner_kind = 'none';
+    state.owner_revision = 3;
+    const app = setup({
+      video: state,
+      operation: (command) => {
+        if (command === 'export_video_diagnostics') throw new Error('保存失败，请选择其他位置。');
+      },
+    });
+    await app.ready();
+    await app.open();
+    expect(screen.getByRole('button', { name: '重新检查连接' })).toBeDisabled();
+    const save = screen.getByRole('button', { name: '导出诊断' });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+    await settle();
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败，请选择其他位置。');
+    expect(screen.queryByText('诊断已保存。')).toBeNull();
+    expect(app.calls('recheck_video_session')).toHaveLength(0);
+  });
+});
+
+const recent = (count = 1) =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `recent-${index}`,
+    title: `最近影片 ${index + 1}.mkv`,
+    format: 'mkv',
+    size: '8589934592',
+    duration_ms: 120000,
+    video_codec: 'hevc',
+    last_selected_ms: 1000,
+    progress:
+      index === 0 ? { position_ms: 45000, duration_ms: 120000, observed_at_ms: 1000 } : null,
+  }));
+
+describe('recent video history', () => {
+  it('selects a bounded history item for analysis without playback or changing music', async () => {
+    const app = setup({ video: initialVideo({ recent_videos: recent(7) }) });
+    await app.ready();
+    await app.open();
+    const list = screen.getByRole('region', { name: '最近影片' });
+    expect(within(list).getAllByRole('listitem')).toHaveLength(5);
+    expect(list).toHaveTextContent('上次确认位置 0:45 / 2:00');
+    expect(within(list).queryByRole('button', { name: /续播/ })).toBeNull();
+    fireEvent.click(within(list).getByRole('button', { name: '显示更多影片' }));
+    expect(within(list).getAllByRole('listitem')).toHaveLength(7);
+    fireEvent.click(within(list).getByRole('button', { name: '重新选择 最近影片 1.mkv' }));
+    await settle();
+    expect(app.calls('select_recent_video')[0][1]).toEqual({ mediaId: 'recent-0' });
+    expect(screen.getByText('正在读取影片信息，不会复制或转换原文件。')).toBeVisible();
+    expect(screen.getByRole('contentinfo', { name: '音乐播放控制' })).toHaveTextContent(
+      '原来的歌曲',
+    );
+    expect(app.calls('start_video_play')).toHaveLength(0);
+    expect(app.calls('control')).toHaveLength(0);
+    expect(app.calls('select_device')).toHaveLength(0);
+  });
+
+  it('confirms forgetting history without stopping the active film and restores focus', async () => {
+    const app = setup({ video: { ...active(), recent_videos: recent() } });
+    await app.ready();
+    await app.open();
+    fireEvent.click(screen.getByRole('button', { name: '移除记录 最近影片 1.mkv' }));
+    let dialog = screen.getByRole('dialog', { name: '移除影片记录' });
+    expect(dialog).toHaveTextContent('不会删除原文件或停止当前播放');
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
+    expect(app.calls('forget_recent_video')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: '移除记录 最近影片 1.mkv' }));
+    dialog = screen.getByRole('dialog', { name: '移除影片记录' });
+    fireEvent.click(within(dialog).getByRole('button', { name: '移除记录' }));
+    await settle();
+    expect(app.calls('forget_recent_video')[0][1]).toEqual({ mediaId: 'recent-0' });
+    expect(screen.queryByRole('dialog', { name: '移除影片记录' })).toBeNull();
+    expect(screen.getByRole('heading', { name: '最近影片' })).toHaveFocus();
+    expect(screen.getByText('影片记录已移除。')).toBeVisible();
+    expect(screen.getByRole('button', { name: '暂停影片' })).toBeEnabled();
+    expect(app.calls('control_video')).toHaveLength(0);
+  });
+
+  it('keeps a failed removal open and prevents duplicate mutations while saving', async () => {
+    const request = deferred<VideoSnapshot>();
+    const app = setup({
+      video: initialVideo({ recent_videos: recent() }),
+      operation: (command) => (command === 'forget_recent_video' ? request.promise : undefined),
+    });
+    await app.ready();
+    await app.open();
+    fireEvent.click(screen.getByRole('button', { name: '移除记录 最近影片 1.mkv' }));
+    const dialog = screen.getByRole('dialog', { name: '移除影片记录' });
+    const remove = within(dialog).getByRole('button', { name: '移除记录' });
+    fireEvent.click(remove);
+    fireEvent.click(remove);
+    expect(remove).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: '取消' })).toBeDisabled();
+    expect(app.calls('forget_recent_video')).toHaveLength(1);
+    await act(async () => request.reject(new Error('索引已被其他进程修改，请重启后再试。')));
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('索引已被其他进程修改');
+    expect(remove).toBeEnabled();
+    expect(screen.getByRole('region', { name: '最近影片' })).toHaveTextContent('最近影片 1.mkv');
+  });
+
+  it('keeps native selection available when history cannot be loaded', async () => {
+    const app = setup({
+      video: initialVideo({
+        recent_videos: [],
+        catalog_warning: '影片索引版本不受支持，已暂停记录保存。',
+      }),
+    });
+    await app.ready();
+    await app.open();
+    expect(screen.getByRole('region', { name: '最近影片' })).toHaveTextContent(
+      '影片索引版本不受支持',
+    );
+    expect(screen.getByRole('button', { name: '选择影片' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: '选择影片' }));
+    await settle();
+    expect(app.calls('pick_video_file')).toHaveLength(1);
+    expect(screen.getByRole('contentinfo', { name: '音乐播放控制' })).toHaveTextContent(
+      '原来的歌曲',
+    );
   });
 });

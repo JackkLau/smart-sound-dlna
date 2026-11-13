@@ -1,6 +1,6 @@
 //! Local, explicitly imported video sources. Paths and file identities never leave Rust.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
@@ -34,6 +34,27 @@ pub struct VideoInfo {
     pub color_transfer: Option<String>,
     pub audio_tracks: Vec<VideoTrackInfo>,
     pub subtitle_tracks: Vec<VideoTrackInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct SourceStamp {
+    pub path: PathBuf,
+    identity: FileIdentity,
+    length: u64,
+    modified: SystemTime,
+}
+
+impl SourceStamp {
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if !self.path.is_absolute() {
+            return Err("影片记录无效，请重新选择文件。".into());
+        }
+        let source = VideoSource::open_import(self.path.clone())?;
+        if source.stamp() != *self {
+            return Err("SOURCE_CHANGED：影片已被替换、修改或移动，请重新选择文件。".into());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -108,12 +129,21 @@ impl VideoSource {
         Ok(file)
     }
 
+    pub(crate) fn stamp(&self) -> SourceStamp {
+        SourceStamp {
+            path: self.path.clone(),
+            identity: self.identity.clone(),
+            length: self.length,
+            modified: self.modified,
+        }
+    }
+
     pub fn length(&self) -> u64 {
         self.length
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum FileIdentity {
     #[cfg(unix)]
     Unix { device: u64, inode: u64 },
@@ -121,7 +151,7 @@ enum FileIdentity {
     Windows { volume: u32, index: u64 },
 }
 
-fn is_link(metadata: &fs::Metadata) -> bool {
+pub(crate) fn is_link(metadata: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;

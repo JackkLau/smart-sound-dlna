@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { messageOf } from '../utils.js';
-import type { Invoke, Mutate, VideoSnapshot } from './types';
+import type { Invoke, Mutate, VideoSession, VideoSnapshot } from './types';
 
 const initial: VideoSnapshot = {
   enabled: false,
@@ -101,8 +101,8 @@ export function useVideo({
     }
   }, [enabled, invoke, accept, getMutationState]);
 
-  const run = useCallback(
-    async (command: string, args: Record<string, unknown> = {}) => {
+  const execute = useCallback(
+    async <T>(command: string, args: Record<string, unknown>, decode: (value: unknown) => T) => {
       const current = refs.current;
       if (!enabled || current.mutating || current.busy) return null;
       current.mutating = true;
@@ -112,8 +112,7 @@ export function useVideo({
       try {
         // Reuse the desktop mutation owner. No second foreground command queue.
         const value = await mutate(command, args, '', { scopedError: true });
-        if (value !== null && current.mounted) accept(value);
-        return value === null ? null : snapshot(value);
+        return value === null ? null : decode(value);
       } catch (failure) {
         if (current.mounted) setError(videoMessage(failure));
         return null;
@@ -125,7 +124,28 @@ export function useVideo({
         }
       }
     },
-    [enabled, mutate, accept, refreshMusic],
+    [enabled, mutate, refreshMusic],
+  );
+  const run = useCallback(
+    (command: string, args: Record<string, unknown> = {}) =>
+      execute(command, args, (value) => {
+        const next = snapshot(value);
+        if (refs.current.mounted) accept(next);
+        return next;
+      }),
+    [execute, accept],
+  );
+  const exportDiagnostics = useCallback(
+    (session: VideoSession) =>
+      execute(
+        'export_video_diagnostics',
+        { sessionId: session.id, expectedGeneration: session.generation },
+        (value) => {
+          if (typeof value !== 'boolean') throw new Error('未能确认诊断是否保存，请重新导出。');
+          return value;
+        },
+      ),
+    [execute],
   );
 
   useEffect(() => {
@@ -151,7 +171,7 @@ export function useVideo({
     };
   }, [enabled, refresh]);
 
-  return { state, error: error || readError, pending, refresh, run };
+  return { state, error: error || readError, pending, refresh, run, exportDiagnostics };
 }
 
 export type VideoController = ReturnType<typeof useVideo>;

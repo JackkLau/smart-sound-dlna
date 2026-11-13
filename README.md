@@ -4,7 +4,7 @@ Windows / macOS 桌面客户端，将电脑里的本地音乐通过 DLNA 投送�
 
 ## 影视直传开发预览
 
-M0 已加入独立影视入口：本地 MP4 / MKV / M2TS 原文件投送、播放控制和明确的音乐/视频切换。影视默认关闭；在仓库根目录运行 `npm run dev:video` 开启开发预览。A7H 与 Windows 的实际播放兼容性仍待验收，当前正式下载入口不代表包含或验证了此功能。详见 [M0 启动、实现边界与验收记录](docs/VIDEO_M0.md)。
+M0 已加入独立影视入口：本地 MP4 / MKV / M2TS 原文件投送、播放控制和明确的音乐/视频切换。影视默认关闭；在仓库根目录运行 `npm run dev:video` 开启开发预览。A7H 与 Windows 的实际播放兼容性仍待验收，当前正式下载入口不代表包含或验证了此功能。详见 [M0 启动、实现边界与验收记录](docs/VIDEO_M0.md)。 后续已加入传输诊断、显式连接重查和包内工具验证，见 [S3 开发进展](docs/VIDEO_M1_PROGRESS.md)。 本轮新增最近影片与可靠播放位置保存，见 [S4.1 实现与验证](docs/VIDEO_S4_PROGRESS.md)。 Windows 预览包的安装与开启方式见 [Windows 测试说明](docs/VIDEO_WINDOWS_TEST.md)。
 
 ## 下载安装包
 
