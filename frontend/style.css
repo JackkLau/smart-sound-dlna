@@ -64,6 +64,12 @@
 .video-notice { margin-bottom: 16px; }
 .video-evidence { margin-top: 20px; }
 .video-evidence > p { margin-top: 8px; overflow-wrap: anywhere; }
+.video-recent .video-recent-list { list-style: none; padding: 0; margin-top: 16px; }
+.video-recent-list > li { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; padding: 16px 0; border-top: 1px solid var(--color-line); }
+.video-recent-info { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.video-recent-actions, .video-recent-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+.video-recent-footer { justify-content: space-between; margin-top: 12px; }
+.video-recent > [role="status"] { min-height: 20px; }
 .video-player-details { display: grid; justify-items: end; gap: 4px; font-size: 11px; color: var(--color-muted); }
 .video-player .transport-buttons { gap: 8px; }
 @media (max-width: 760px) {

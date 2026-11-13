@@ -4,6 +4,8 @@ import { Range } from '../Player.jsx';
 import { formatTime } from '../utils.js';
 import type { VideoDevice, VideoInfo, VideoSession } from './types';
 import { videoMessage, type VideoController } from './useVideo';
+import VideoDiagnostics from './VideoDiagnostics';
+import RecentVideos from './RecentVideos';
 
 const phaseLabels: Record<string, string> = {
   prepared: '已准备',
@@ -128,6 +130,7 @@ export default function VideoPanel({
   const [candidate, setCandidate] = useState('');
   const [confirm, setConfirm] = useState(false);
   const candidateRef = useRef<HTMLButtonElement | null>(null);
+  const sourceHeading = useRef<HTMLHeadingElement>(null);
   const unavailable = busy || pending || !state.enabled;
   const probing = state.probe?.status === 'running' || state.probe?.status === 'probing';
   const entry = state.entry;
@@ -192,7 +195,9 @@ export default function VideoPanel({
       <div className="video-columns">
         <section className="video-source" aria-labelledby="video-source-title">
           <div className="video-section-heading">
-            <h2 id="video-source-title">影片文件</h2>
+            <h2 id="video-source-title" ref={sourceHeading} tabIndex={-1}>
+              影片文件
+            </h2>
             <button
               type="button"
               className="button outline"
@@ -328,8 +333,20 @@ export default function VideoPanel({
             <li>原文件：{state.session.http_requested ? '电视已请求读取' : '尚未收到读取请求'}</li>
             <li>画面和声音：请在电视上确认，读取数据不等于已经正常播放。</li>
           </ul>
+          <VideoDiagnostics
+            key={state.session.id + ':' + state.session.generation}
+            video={video}
+            session={state.session}
+            unavailable={unavailable}
+          />
         </section>
       )}
+      <RecentVideos
+        video={video}
+        unavailable={unavailable}
+        probing={probing}
+        onSelected={() => sourceHeading.current?.focus()}
+      />
       <p className="local-note">
         <span className="status-dot" />
         电脑与应用需保持运行。此版本不转换影片，也不自动播放下一部。

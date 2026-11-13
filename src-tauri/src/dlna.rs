@@ -469,6 +469,18 @@ pub async fn fetch_device(location: &str) -> Result<Device, String> {
         .ok_or_else(|| "该设备未提供 DLNA AVTransport 服务，请确认音箱型号和固件支持 DLNA。".into())
 }
 
+/// Recheck one renderer without substituting a sibling from the same description.
+pub async fn fetch_device_by_id(
+    location: &str,
+    expected_id: &str,
+    interface_ip: Option<Ipv4Addr>,
+) -> Result<Option<Device>, String> {
+    let devices = time::timeout(DESCRIPTION_WINDOW, fetch_devices(location, interface_ip))
+        .await
+        .map_err(|_| "读取电视描述超时，请检查设备是否在线。".to_string())??;
+    Ok(devices.into_iter().find(|device| device.id == expected_id))
+}
+
 fn usable_interface(ip: Ipv4Addr, is_up: bool) -> bool {
     is_up && !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast() && !ip.is_broadcast()
 }

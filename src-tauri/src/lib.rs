@@ -11,6 +11,8 @@ mod mobile_pairing;
 mod online;
 mod track_names;
 pub mod video;
+mod video_catalog;
+mod video_diagnostics;
 #[cfg(feature = "desktop")]
 mod video_tools;
 pub mod voice;

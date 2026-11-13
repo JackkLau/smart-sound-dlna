@@ -157,6 +157,23 @@ async fn pick_video_file(
 }
 
 #[tauri::command]
+async fn select_recent_video(
+    media_id: String,
+    state: State<'_, AppState>,
+) -> Result<VideoSnapshot, String> {
+    let ffprobe = crate::video_tools::ffprobe_path()?;
+    state.engine.select_recent_video(&media_id, ffprobe).await
+}
+
+#[tauri::command]
+async fn forget_recent_video(
+    media_id: String,
+    state: State<'_, AppState>,
+) -> Result<VideoSnapshot, String> {
+    state.engine.forget_recent_video(&media_id).await
+}
+
+#[tauri::command]
 async fn cancel_video_probe(
     task_id: String,
     state: State<'_, AppState>,
@@ -198,6 +215,54 @@ async fn control_video(
         .engine
         .control_video(&session_id, expected_generation, &action, position_ms)
         .await
+}
+
+#[tauri::command]
+async fn recheck_video_session(
+    session_id: String,
+    expected_generation: u64,
+    state: State<'_, AppState>,
+) -> Result<VideoSnapshot, String> {
+    state
+        .engine
+        .recheck_video_session(&session_id, expected_generation)
+        .await
+}
+
+#[tauri::command]
+async fn export_video_diagnostics(
+    session_id: String,
+    expected_generation: u64,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let report = state
+        .engine
+        .video_diagnostic_report(&session_id, expected_generation)
+        .await?;
+    let bytes = serde_json::to_vec_pretty(&report).map_err(|_| "诊断内容生成失败。")?;
+    if state.picker_busy.swap(true, Ordering::AcqRel) {
+        return Err("请先完成已打开的文件选择窗口。".into());
+    }
+    let guard = PickerGuard(state.picker_busy.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        let file = app
+            .dialog()
+            .file()
+            .set_title("保存影视诊断")
+            .set_file_name("video-diagnostics.json")
+            .add_filter("诊断报告", &["json"])
+            .blocking_save_file();
+        let Some(file) = file else {
+            return Ok(false);
+        };
+        let path = file.into_path().map_err(|_| "诊断保存位置无效。")?;
+        crate::video_diagnostics::write_report(&path, &bytes)?;
+        Ok(true)
+    })
+    .await
+    .map_err(|_| "诊断保存任务未完成。")?
 }
 
 #[tauri::command]
@@ -294,10 +359,14 @@ pub fn run() {
         get_config,
         get_video_state,
         pick_video_file,
+        select_recent_video,
+        forget_recent_video,
         cancel_video_probe,
         prepare_video_play,
         start_video_play,
         control_video,
+        recheck_video_session,
+        export_video_diagnostics,
         start_music_play,
         discover_devices,
         add_device,

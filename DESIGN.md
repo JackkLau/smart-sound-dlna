@@ -142,6 +142,12 @@ The video page distinguishes command acceptance, HTTP reading and the television
 
 Canonical owners remain `components.jsx#Select`, `components.jsx#Dialog`, `Player.jsx#Range` and `useDesktop.mutate`. `video/VideoPanel.tsx` is the business-specific layout; `video/useVideo.ts` owns its independent read state. No new runtime design tokens or independent toast system are added. `tests/react/video.test.tsx` covers navigation, read-only preparation, explicit handoff, busy/error states and disabled music controls; existing music suites remain required.
 
+### Video session diagnostics and recovery
+
+The playback feedback region adds a native disclosure using the existing `video-track-details` / `video-facts` recipes. It separates bytes supplied to HTTP responses from playback position and actual TV reception; repeated ranges contribute again to the byte count. Diagnostic fields remain text, never inferred playback or decoding success. No new visual tokens or scrolling owner are introduced.
+
+“重新检查连接” makes an explicit, read-only native request for the current session/generation and never resends Play. It is unavailable after that session loses ownership. “导出诊断” uses a Rust-owned system save dialog; a stopped session can still export its retained diagnostics. Neither command accepts a renderer-supplied file path. Both use the same `useDesktop.mutate` foreground owner as playback. Cancellation returns false and leaves state intact without a success message; true shows an inline saved status. Errors remain in the existing persistent video error region. Session changes reset the saved status, and stale polling cannot replace a foreground result.
+
 ### Music IPC contract
 
 | Renderer operation | Native command | Arguments / result |
@@ -275,3 +281,12 @@ Desktop playback mode, voice speaker, favorite folder and network-interface sele
 `parse_video({platform,url})` selects the native provider; legacy Bilibili commands remain compatible. Public Douyin SSR is tried first. If its metadata is unavailable, a short-lived incognito official webview loads the video and requests its public detail from that origin. It exports only a validated matching video ID, title, author, duration and allowlisted media URLs through a nonce-scoped intercepted callback; no account cookies or Tauri capability are granted to remote content. Manual close cancels; a 120-second deadline closes an unfinished attempt. Challenges are not solved automatically. Signed media URLs stay in native memory and are omitted from previews/index/logs.
 
 Both providers use the same bounded queue, cancel/retry controls, atomic publication and library deduplication. Douyin temporarily downloads MP4, copies only AAC samples into M4A, and retains the original sample description including HE-AAC SBR/PS configuration. No transcoding, external executable or permanent video copy is introduced. Progress distinguishes downloading, extracting and importing. Original title recognition, manual rename and voice naming work for the resulting track as for other library imports. Phone import remains Bilibili in this iteration; phone playback and mode synchronization are unchanged.
+
+
+### Recent video history (S4.1)
+
+The video workspace uses its existing panel, text buttons and shared `Dialog` for a bounded recent list. Show five records initially and five more per explicit “显示更多影片” action, with displayed/total counts; document scrolling remains the owner. No filters, URL state, new visual tokens, toast system or automatic playback are introduced. History and confirmed positions belong to a separate native index, with a maximum of 100 entries. Native paths and the local device binding never enter the renderer.
+
+“重新选择” validates the source and starts a new probe, then focuses the existing source heading. It never sends Play or Seek, changes the selected music device, or stops the current content. Probe progress and errors reuse the current video workflow. Buttons lock under the existing desktop mutation owner and during probing. A native file picker remains available when history is corrupt; the history panel explains persistence failures.
+
+“移除记录” uses the canonical confirmation dialog and danger button, initially focuses Cancel, and names the movie and loss of history/progress. Original files and active playback are preserved. Failed publication keeps the dialog and entry; a successful removal announces completion and focuses the recent-list heading because the opener no longer exists. Escape restores the opener when cancelling. This differs deliberately from removing an actively playing music library track, whose established contract stops that track. The recent list is navigation/history, not the active video's grant owner.

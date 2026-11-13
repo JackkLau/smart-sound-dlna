@@ -306,6 +306,7 @@ pub struct Engine {
     media: MediaServer,
     player: AsyncMutex<Player>,
     video: AsyncMutex<VideoRuntime>,
+    video_catalog: Option<Arc<Mutex<crate::video_catalog::VideoCatalog>>>,
     actions: AsyncMutex<()>,
     discovery: AsyncMutex<()>,
     activity: watch::Sender<u64>,
@@ -325,10 +326,26 @@ impl Engine {
     ) -> Result<Arc<Self>, String> {
         let downloads = Downloader::new(&data_dir)?;
         let voice = VoiceService::new()?;
+        let video_data_dir = data_dir.clone();
         let library = tokio::task::spawn_blocking(move || Library::load(data_dir))
             .await
             .map_err(|e| e.to_string())??;
         let library = Arc::new(Mutex::new(library));
+        let video_catalog = if video_enabled {
+            Some(Arc::new(Mutex::new(
+                tokio::task::spawn_blocking(move || {
+                    crate::video_catalog::VideoCatalog::load(video_data_dir)
+                })
+                .await
+                .map_err(|_| "影片索引加载任务未完成。")?,
+            )))
+        } else {
+            None
+        };
+        let catalog_snapshot = video_catalog
+            .as_ref()
+            .map(|catalog| catalog.lock().unwrap().snapshot())
+            .unwrap_or_default();
         let shutdown = CancellationToken::new();
         let media = media::start(library.clone(), shutdown.clone()).await?;
         Ok(Arc::new(Self {
@@ -337,7 +354,8 @@ impl Engine {
             library,
             media,
             player: AsyncMutex::new(Player::default()),
-            video: AsyncMutex::new(VideoRuntime::new(video_enabled)),
+            video: AsyncMutex::new(VideoRuntime::new(video_enabled, catalog_snapshot)),
+            video_catalog,
             actions: AsyncMutex::new(()),
             discovery: AsyncMutex::new(()),
             activity: watch::channel(0).0,

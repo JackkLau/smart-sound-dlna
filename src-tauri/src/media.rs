@@ -10,13 +10,14 @@ use axum::Router;
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::io::SeekFrom;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
-};
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 use tokio_util::sync::CancellationToken;
+
+#[path = "media_video.rs"]
+mod video_transfer;
+pub use video_transfer::{VideoRequestSnapshot, VideoTransferMonitor, VideoTransferSnapshot};
 
 #[derive(Clone)]
 struct MediaState {
@@ -30,13 +31,14 @@ struct MediaState {
 struct VideoRegistration {
     source: VideoSource,
     cancellation: CancellationToken,
-    requested: Arc<AtomicBool>,
+    transfer: VideoTransferMonitor,
 }
 
 #[derive(Clone, Debug)]
 pub struct VideoGrant {
     pub id: String,
     pub url: String,
+    pub transfer: VideoTransferMonitor,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +78,8 @@ impl MediaServer {
             "http://{authority}:{}/video/{id}/{}.{}",
             self.port, source.info.id, source.info.format
         );
+        let cancellation = self.shutdown.child_token();
+        let transfer = VideoTransferMonitor::new(cancellation.clone());
         self.videos
             .lock()
             .map_err(|_| "视频资源登记暂不可用。")?
@@ -83,11 +87,11 @@ impl MediaServer {
                 id.clone(),
                 VideoRegistration {
                     source,
-                    cancellation: self.shutdown.child_token(),
-                    requested: Arc::new(AtomicBool::new(false)),
+                    cancellation,
+                    transfer: transfer.clone(),
                 },
             );
-        Ok(VideoGrant { id, url })
+        Ok(VideoGrant { id, url, transfer })
     }
 
     pub fn revoke_video(&self, id: &str) {
@@ -98,12 +102,12 @@ impl MediaServer {
         }
     }
 
-    /// Evidence of an authorized GET, not evidence that a decoder displayed a frame.
+    /// Evidence of bytes yielded to an authorized GET body, not of client receipt or decoding.
     pub fn video_evidence(&self, id: &str) -> bool {
         self.videos
             .lock()
             .ok()
-            .and_then(|videos| videos.get(id).map(|r| r.requested.load(Ordering::Acquire)))
+            .and_then(|videos| videos.get(id).map(|r| r.transfer.has_bytes()))
             .unwrap_or(false)
     }
 
@@ -192,12 +196,28 @@ async fn serve_video(
     {
         return empty_response(StatusCode::NOT_FOUND);
     }
-    let source = registration.source.clone();
-    let file = match tokio::task::spawn_blocking(move || source.open()).await {
-        Ok(Ok(file)) => file,
-        _ => return empty_response(StatusCode::NOT_FOUND),
+    let transfer = &registration.transfer;
+    transfer.requested(method.as_str(), headers.contains_key(header::RANGE));
+    let Some(permit) = transfer.try_read() else {
+        transfer.response(method.as_str(), 503, None);
+        let mut response = empty_response(StatusCode::SERVICE_UNAVAILABLE);
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, "1".parse().unwrap());
+        return response;
     };
+    let source = registration.source.clone();
+    // The opening task owns the permit if the request is cancelled during disk I/O.
+    let (file, permit) =
+        match tokio::task::spawn_blocking(move || source.open().map(|file| (file, permit))).await {
+            Ok(Ok(opened)) => opened,
+            _ => {
+                transfer.response(method.as_str(), 404, None);
+                return empty_response(StatusCode::NOT_FOUND);
+            }
+        };
     if registration.cancellation.is_cancelled() {
+        transfer.response(method.as_str(), 404, None);
         return empty_response(StatusCode::NOT_FOUND);
     }
     let size = registration.source.length();
@@ -217,13 +237,14 @@ async fn serve_video(
     let selected = match parse_range(requested, size) {
         Ok(value) => value,
         Err(()) => {
+            transfer.response(method.as_str(), 416, None);
             return video_response(
                 StatusCode::RANGE_NOT_SATISFIABLE,
                 &registration.source.info.format,
                 0,
                 Some(format!("bytes */{size}")),
                 Body::empty(),
-            )
+            );
         }
     };
     let (start, length, status, range) = match selected {
@@ -236,6 +257,7 @@ async fn serve_video(
         None => (0, size, StatusCode::OK, None),
     };
     if method == Method::HEAD {
+        transfer.response(method.as_str(), status.as_u16(), None);
         return video_response(
             status,
             &registration.source.info.format,
@@ -246,11 +268,17 @@ async fn serve_video(
     }
     let mut file = tokio::fs::File::from_std(file);
     if file.seek(SeekFrom::Start(start)).await.is_err() {
+        transfer.response(method.as_str(), 404, None);
         return empty_response(StatusCode::NOT_FOUND);
     }
-    registration.requested.store(true, Ordering::Release);
-    let stream = ReaderStream::with_capacity(file.take(length), 64 * 1024)
-        .take_until(registration.cancellation.cancelled_owned());
+    transfer.response(method.as_str(), status.as_u16(), selected);
+    let stream = video_transfer::stream_file(
+        file,
+        length,
+        transfer.clone(),
+        permit,
+        registration.cancellation,
+    );
     video_response(
         status,
         &registration.source.info.format,
@@ -682,6 +710,164 @@ mod tests {
             format!("bytes {offset}-{}/{total}", offset + 7, total = offset + 8)
         );
         assert_eq!(headers["content-length"], "8");
+        let stats = grant.transfer.snapshot();
+        assert_eq!(stats.bytes_streamed, "8");
+        let range = stats.last_request.unwrap();
+        assert_eq!(range.range_start, Some(offset.to_string()));
+        assert_eq!(range.range_end, Some((offset + 7).to_string()));
+    }
+
+    #[tokio::test]
+    async fn video_transfer_diagnostics_count_real_bytes_and_normalized_ranges_only() {
+        let fixture = fixture(b"music").await;
+        let path = fixture._directory.path().join("private movie.mkv");
+        let content: Vec<u8> = (0..70_000).map(|n| (n % 251) as u8).collect();
+        std::fs::write(&path, &content).unwrap();
+        let grant = fixture
+            .server
+            .register_video(
+                "127.0.0.1",
+                crate::video::VideoSource::open_import(path.clone()).unwrap(),
+            )
+            .unwrap();
+        let video_path = url::Url::parse(&grant.url).unwrap().path().to_owned();
+        assert_eq!(
+            fixture
+                .request("HEAD", &video_path, "Range: bytes=2-5\r\n")
+                .await
+                .0,
+            200
+        );
+        let initial = grant.transfer.snapshot();
+        assert_eq!(initial.head_requests, 1);
+        assert_eq!(initial.bytes_streamed, "0");
+        assert!(!fixture.server.video_evidence(&grant.id));
+        for _ in 0..4 {
+            let requests =
+                (0..4).map(|_| fixture.request("GET", &video_path, "Range: bytes=65530-65550\r\n"));
+            for (status, _, body) in futures_util::future::join_all(requests).await {
+                assert_eq!(status, 206);
+                assert_eq!(body, content[65530..=65550]);
+            }
+        }
+        let served = grant.transfer.snapshot();
+        assert_eq!(served.get_requests, 16);
+        assert_eq!(served.range_requests, 17);
+        assert_eq!(served.bytes_streamed, (16 * 21).to_string());
+        assert!(fixture.server.video_evidence(&grant.id));
+        assert_eq!(served.active_streams, 0);
+        assert!(served.peak_active_streams <= 8);
+        let last = served.last_request.unwrap();
+        assert_eq!(last.method, "GET");
+        assert_eq!(last.status, 206);
+        assert_eq!(last.range_start.as_deref(), Some("65530"));
+        assert_eq!(last.range_end.as_deref(), Some("65550"));
+        assert_eq!(
+            fixture
+                .request("GET", &video_path, "Range: bytes=70000-\r\n")
+                .await
+                .0,
+            416
+        );
+        fixture.server.revoke_video(&grant.id);
+        let stopped = grant.transfer.snapshot();
+        assert!(stopped.revoked);
+        assert_eq!(stopped.rejected_requests, 1);
+        assert_eq!(stopped.bytes_streamed, (16 * 21).to_string());
+        assert_eq!(stopped.last_request.as_ref().unwrap().status, 416);
+        assert!(stopped.last_request.as_ref().unwrap().range_start.is_none());
+        let report = serde_json::to_string(&stopped).unwrap();
+        for sensitive in [
+            grant.id.as_str(),
+            grant.url.as_str(),
+            path.to_str().unwrap(),
+            "private movie",
+        ] {
+            assert!(
+                !report.contains(sensitive),
+                "transfer reports must not include source or access identifiers"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_backpressured_video_closes_reader_without_waiting_for_client() {
+        for shutdown in [false, true] {
+            let fixture = fixture(b"music").await;
+            let path = fixture._directory.path().join("unread.mkv");
+            drop(sparse_file(&path, 1u64 << 33));
+            let grant = fixture
+                .server
+                .register_video(
+                    "127.0.0.1",
+                    crate::video::VideoSource::open_import(path.clone()).unwrap(),
+                )
+                .unwrap();
+            let video_path = url::Url::parse(&grant.url).unwrap().path().to_owned();
+            let mut reader = tokio::net::TcpStream::connect((
+                std::net::Ipv4Addr::LOCALHOST,
+                fixture.server.port,
+            ))
+            .await
+            .unwrap();
+            reader
+                .write_all(
+                    format!(
+                        "GET {video_path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut headers = Vec::new();
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(reader.read_u8().await.unwrap());
+                }
+            })
+            .await
+            .unwrap();
+            assert!(headers.starts_with(b"HTTP/1.1 200"));
+            assert_eq!(grant.transfer.snapshot().active_streams, 1);
+            // Keep the client connected and never drain the response body.
+            if shutdown {
+                fixture.shutdown.cancel();
+            } else {
+                fixture.server.revoke_video(&grant.id);
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while grant.transfer.snapshot().active_streams != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            let stopped = grant.transfer.snapshot();
+            assert!(stopped.revoked);
+            assert!(stopped.bytes_streamed.parse::<u64>().unwrap() < 1u64 << 33);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                // A new exclusive handle can only open after the old reader releases its handle.
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        if std::fs::OpenOptions::new()
+                            .read(true)
+                            .share_mode(0)
+                            .open(&path)
+                            .is_ok()
+                        {
+                            break;
+                        }
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+            }
+            std::fs::rename(&path, path.with_extension("closed")).unwrap();
+            drop(reader);
+        }
     }
 
     #[tokio::test]
@@ -717,6 +903,67 @@ mod tests {
             total < length,
             "revoked stream must not deliver the whole source"
         );
+    }
+
+    #[tokio::test]
+    async fn slow_video_readers_have_a_bounded_per_grant_limit_without_blocking_music() {
+        let fixture = fixture(b"music").await;
+        let path = fixture._directory.path().join("slow.mkv");
+        drop(sparse_file(&path, 1u64 << 33));
+        let grant = fixture
+            .server
+            .register_video(
+                "127.0.0.1",
+                crate::video::VideoSource::open_import(path).unwrap(),
+            )
+            .unwrap();
+        let video_path = url::Url::parse(&grant.url).unwrap().path().to_owned();
+        let mut readers = Vec::new();
+        for _ in 0..8 {
+            let mut connection = tokio::net::TcpStream::connect((
+                std::net::Ipv4Addr::LOCALHOST,
+                fixture.server.port,
+            ))
+            .await
+            .unwrap();
+            connection
+                .write_all(
+                    format!(
+                        "GET {video_path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut headers = Vec::new();
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(connection.read_u8().await.unwrap());
+                }
+            })
+            .await
+            .unwrap();
+            assert!(headers.starts_with(b"HTTP/1.1 200"));
+            readers.push(connection);
+        }
+        let (status, headers, _) = fixture.request("HEAD", &video_path, "").await;
+        assert_eq!(status, 503, "a ninth read must not allocate another stream");
+        assert_eq!(headers["retry-after"], "1");
+        assert_eq!(
+            fixture.request("GET", &fixture.path(), "").await.2,
+            b"music"
+        );
+        drop(readers);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if fixture.request("HEAD", &video_path, "").await.0 == 200 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

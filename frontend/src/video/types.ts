@@ -31,6 +31,35 @@ export type VideoPlan = {
   can_seek: boolean;
 };
 
+export type VideoDiagnostics = {
+  schema_version: number;
+  elapsed_ms: number;
+  last_command: {
+    action: string;
+    outcome: 'pending' | 'accepted' | 'failed';
+    elapsed_ms: number;
+  } | null;
+  last_poll_age_ms: number | null;
+  consecutive_poll_failures: number;
+  state_source: 'command' | 'poll' | 'unknown';
+  transfer: {
+    get_requests: number;
+    head_requests: number;
+    range_requests: number;
+    rejected_requests: number;
+    active_streams: number;
+    peak_active_streams: number;
+    bytes_streamed: string;
+    last_request: {
+      method: string;
+      status: number;
+      range_start: string | null;
+      range_end: string | null;
+    } | null;
+    revoked: boolean;
+  };
+};
+
 export type VideoSession = {
   id: string;
   generation: number;
@@ -45,10 +74,24 @@ export type VideoSession = {
   command_accepted: boolean;
   http_requested: boolean;
   transport_state: string;
+  diagnostics?: VideoDiagnostics;
   error: string | null;
 };
 
+export type RecentVideo = {
+  id: string;
+  title: string;
+  format: string;
+  size: string;
+  duration_ms: number | null;
+  video_codec: string | null;
+  last_selected_ms: number;
+  progress: { position_ms: number; duration_ms: number; observed_at_ms: number } | null;
+};
+
 export type VideoSnapshot = {
+  recent_videos?: RecentVideo[];
+  catalog_warning?: string | null;
   enabled: boolean;
   owner_kind?: string;
   entry: VideoInfo | null;
