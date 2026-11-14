@@ -154,6 +154,15 @@ async function verifiedProbeBytes(bundle) {
     const copies = [path.join(temporary, 'packaged'), path.join(temporary, 'source')];
     await copyFile(bundle.probe, copies[0]);
     await copyFile(staged, copies[1]);
+    // The pinned Intel binary is unsigned. Its first signature aligns __LINKEDIT
+    // with trailing zeroes that codesign retains on removal. Apply the same
+    // round trip to the verified source copy so every file byte is compared.
+    if (!machCommands(await readFile(copies[1])).some((command) => command.type === 0x1d)) {
+      await execute('/usr/bin/codesign', ['--sign', '-', copies[1]], {
+        timeout: 10000,
+        maxBuffer: MAX_OUTPUT,
+      });
+    }
     for (const file of copies) {
       if (machCommands(await readFile(file)).some((command) => command.type === 0x1d)) {
         await execute('/usr/bin/codesign', ['--remove-signature', file], {
