@@ -82,6 +82,9 @@ export async function prepareVideoTools(root = projectRoot, requestedTarget = ho
       2,
     ) + '\n',
   );
+  execFileSync(process.platform === 'win32' ? 'python' : 'python3', [
+    path.join(root, 'scripts', 'prepare-subtitle-tool.py'), target,
+  ], { stdio: 'inherit', timeout: 300000 });
   return { executable, target, version: version.split('\n')[0] };
 }
 

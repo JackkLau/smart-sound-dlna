@@ -17,11 +17,15 @@ export type VideoInfo = {
   height: number | null;
   pixel_format: string | null;
   color_transfer: string | null;
+  can_burn_hdr10: boolean;
   audio_tracks: VideoTrackInfo[];
   subtitle_tracks: VideoTrackInfo[];
 };
 
+export type SubtitleSelection = { index: number; mode: 'remux' | 'burn' | 'burn_hdr10' };
+
 export type VideoPlan = {
+  subtitle?: SubtitleSelection | null;
   id: string;
   media_id: string;
   device_id: string;
@@ -61,6 +65,7 @@ export type VideoDiagnostics = {
 };
 
 export type VideoSession = {
+  subtitle?: SubtitleSelection | null;
   id: string;
   generation: number;
   media_id: string;
@@ -95,7 +100,7 @@ export type VideoSnapshot = {
   enabled: boolean;
   owner_kind?: string;
   entry: VideoInfo | null;
-  probe: { task_id: string; status: string; error: string | null } | null;
+  probe: { task_id: string; status: string; error: string | null; percent?: number | null } | null;
   plan: VideoPlan | null;
   session: VideoSession | null;
   owner_revision: number;

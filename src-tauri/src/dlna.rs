@@ -68,6 +68,7 @@ pub struct TransportStatus {
 #[derive(Clone, Debug)]
 struct NetworkInterface {
     name: String,
+    broadcast: Option<Ipv4Addr>,
     ip: Ipv4Addr,
 }
 
@@ -491,12 +492,18 @@ fn network_interfaces() -> Result<Vec<NetworkInterface>, String> {
     for interface in
         if_addrs::get_if_addrs().map_err(|error| format!("无法读取本机网卡：{error}"))?
     {
-        if let IpAddr::V4(ip) = interface.ip() {
+        if let if_addrs::IfAddr::V4(addr) = &interface.addr {
+            let ip = addr.ip;
             if usable_interface(ip, interface.is_oper_up())
                 && seen.insert((interface.name.clone(), ip))
             {
                 found.push(NetworkInterface {
                     name: interface.name,
+                    broadcast: addr.broadcast.filter(|address| {
+                        addr.prefixlen < 31
+                            && address != &ip
+                            && is_lan_address(IpAddr::V4(*address))
+                    }),
                     ip,
                 });
             }
@@ -611,7 +618,6 @@ async fn scan_interface(
     let retry_at = Instant::now() + retry_after;
     if let Err(error) = send_search_round(&socket, destination, deadline).await {
         result.warnings.push(format!("网卡 {label}：{error}"));
-        return result;
     }
     let mut retried = false;
     let mut seen = HashSet::new();
@@ -623,6 +629,18 @@ async fn scan_interface(
                 retried = true;
                 if let Err(error) = send_search_round(&socket, destination, deadline).await {
                     result.warnings.push(format!("网卡 {label} 重试失败：{error}"));
+                }
+                // Some TVs miss Wi-Fi multicast but answer the same M-SEARCH on
+                // the local subnet broadcast. Keep the SSDP HOST and reply socket.
+                if let Some(ip) = interface.broadcast {
+                    let address = SocketAddr::from((ip, destination.port()));
+                    let extra = async {
+                        socket.set_broadcast(true).map_err(|e| e.to_string())?;
+                        send_search_round(&socket, address, deadline).await
+                    };
+                    if let Err(error) = extra.await {
+                        result.warnings.push(format!("网卡 {label} 的本地广播搜索失败：{error}"));
+                    }
                 }
             }
             received = socket.recv_from(&mut buffer) => {
@@ -1169,6 +1187,21 @@ impl Controller {
         {
             Ok(_) => Ok(()),
             Err(error) if matches!(error.code, Some(401 | 712)) => Ok(()),
+            // Some renderers (including the A7H) reject setting NORMAL even
+            // while already in that mode. Keep real queue-mode failures visible.
+            Err(error) if error.code == Some(501) => {
+                let settings = self.soap("GetTransportSettings", &[], false).await;
+                if settings
+                    .as_ref()
+                    .ok()
+                    .and_then(|v| v.get("PlayMode"))
+                    .is_some_and(|mode| mode.eq_ignore_ascii_case("NORMAL"))
+                {
+                    Ok(())
+                } else {
+                    Err(error.message)
+                }
+            }
             Err(error) => Err(error.message),
         }
     }
@@ -1364,6 +1397,7 @@ mod tests {
         disconnect: HashSet<String>,
         position_response: Option<String>,
         transport_response: Option<String>,
+        settings_response: Option<String>,
     }
 
     struct MockRenderer {
@@ -1498,6 +1532,7 @@ mod tests {
                     let arguments = match action.as_str() {
                         "GetTransportInfo" => state.transport_response.as_deref().unwrap_or("<u:CurrentTransportState>PLAYING</u:CurrentTransportState>"),
                         "GetPositionInfo" => state.position_response.as_deref().unwrap_or("<u:TrackDuration>01:02:03.4</u:TrackDuration><u:RelTime>00:01:23</u:RelTime><u:TrackURI>http://127.0.0.1/music.mp3?x=1&amp;y=2</u:TrackURI>"),
+                        "GetTransportSettings" => state.settings_response.as_deref().unwrap_or(""),
                         "GetVolume" => "<u:CurrentVolume>28</u:CurrentVolume>",
                         "GetProtocolInfo" => "<u:Source></u:Source><u:Sink>http-get:*:video/mp4:*,http-get:*:video/x-matroska:*</u:Sink>",
                         _ => "",
@@ -1737,6 +1772,7 @@ mod tests {
             NetworkInterface {
                 name: "test".into(),
                 ip: Ipv4Addr::LOCALHOST,
+                broadcast: None,
             },
             destination,
             Duration::from_millis(300),
@@ -1756,6 +1792,42 @@ mod tests {
                 2
             );
         }
+    }
+
+    #[tokio::test]
+    async fn search_finds_renderer_that_only_answers_subnet_retry() {
+        // A second loopback address stands in for the directed broadcast. Nothing
+        // leaves the host and the first destination stays silent throughout.
+        let receiver = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let port = receiver.local_addr().unwrap().port();
+        let silent = Ipv4Addr::new(127, 0, 0, 2);
+        let task = tokio::spawn(async move {
+            let mut packet = [0u8; 2048];
+            let (size, peer) = receiver.recv_from(&mut packet).await.unwrap();
+            assert!(packet[..size]
+                .starts_with(b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n"));
+            receiver
+                .send_to(
+                    b"HTTP/1.1 200 OK\r\nLOCATION: http://127.0.0.1:1722/\r\n\r\n",
+                    peer,
+                )
+                .await
+                .unwrap();
+        });
+        let result = scan_interface(
+            NetworkInterface {
+                name: "test".into(),
+                ip: Ipv4Addr::LOCALHOST,
+                broadcast: Some(Ipv4Addr::LOCALHOST),
+            },
+            SocketAddr::from((silent, port)),
+            Duration::from_millis(500),
+            Duration::from_millis(30),
+        )
+        .await;
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].location, "http://127.0.0.1:1722/");
+        task.await.unwrap();
     }
 
     #[tokio::test]
@@ -1936,6 +2008,39 @@ mod tests {
             .actions
             .iter()
             .any(|a| a.0 == "Play"));
+    }
+
+    #[tokio::test]
+    async fn music_plays_after_501_only_when_renderer_confirms_normal_mode() {
+        let renderer = MockRenderer::start().await;
+        let controller = Controller::new(renderer.device().await);
+        let url = format!("{}/track.m4a", renderer.base);
+        for (response, can_play) in [
+            ("<PlayMode>NORMAL</PlayMode>", true),
+            ("<PlayMode>REPEAT_ONE</PlayMode>", false),
+            ("", false),
+        ] {
+            {
+                let mut state = renderer.state.lock().unwrap();
+                state.actions.clear();
+                state.fail_actions.insert("SetPlayMode".into(), 501);
+                state.settings_response = Some(response.into());
+            }
+            let result = controller.play(&url, "测试音乐", "audio/mp4").await;
+            assert_eq!(result.is_ok(), can_play, "{result:?}");
+            let state = renderer.state.lock().unwrap();
+            let actions: Vec<_> = state.actions.iter().map(|a| a.0.as_str()).collect();
+            let mut expected = vec![
+                "Stop",
+                "SetAVTransportURI",
+                "SetPlayMode",
+                "GetTransportSettings",
+            ];
+            if can_play {
+                expected.push("Play");
+            }
+            assert_eq!(actions, expected);
+        }
     }
 
     #[tokio::test]

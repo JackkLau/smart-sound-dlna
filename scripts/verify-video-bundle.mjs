@@ -100,6 +100,7 @@ export async function inspectVideoBundle(directory, target) {
   const executableDir = mac ? 'Contents/MacOS/' : '';
   const resourceDir = mac ? 'Contents/Resources/' : '';
   const probe = await bundleFile(root, `${executableDir}${spec.file}`);
+  const encoder = await bundleFile(root, executableDir + (mac ? 'ffmpeg' : 'ffmpeg.exe'));
   const main = await bundleFile(root, `${executableDir}xiaomi-dlna-desktop${mac ? '' : '.exe'}`);
   const manifestFile = await bundleFile(root, `${resourceDir}ffprobe-manifest.json`, MAX_OUTPUT);
   await bundleFile(root, `${resourceDir}licenses/ffprobe.md`, MAX_OUTPUT);
@@ -118,12 +119,12 @@ export async function inspectVideoBundle(directory, target) {
   } catch {
     throw new Error('Packaged FFprobe manifest does not match the pinned tool source');
   }
-  for (const file of [probe, main]) {
+  for (const file of [probe, encoder, main]) {
     if (executableTarget(await readFile(file)) !== target) {
       throw new Error(`Unexpected executable architecture: ${path.basename(file)}`);
     }
   }
-  return { root, target, spec, probe, main, manifest };
+  return { root, target, spec, probe, encoder, main, manifest };
 }
 
 // Prove the installed tool works independently of developer tools on PATH.
@@ -136,23 +137,23 @@ export function probeEnvironment(environment = process.env) {
   return result;
 }
 
-async function verifiedProbeBytes(bundle) {
-  const packaged = await readFile(bundle.probe);
+async function verifyToolBytes(bundle, file, name, expectedHash) {
+  const packaged = await readFile(file);
   if (bundle.spec.platform === 'win32') {
-    if (digest(packaged) !== bundle.spec.sha256)
-      throw new Error('Packaged FFprobe bytes do not match the pinned source');
+    if (digest(packaged) !== expectedHash)
+      throw new Error('Packaged tool bytes do not match the pinned source');
     return;
   }
   // Tauri replaces the Mach-O signature while assembling the app. Compare
   // copies with their signatures removed; never mutate the app or source tool.
-  const staged = path.join(projectRoot, 'src-tauri/binaries', `ffprobe-${bundle.target}`);
-  if (digest(await readFile(staged)) !== bundle.spec.sha256) {
-    throw new Error('Staged FFprobe bytes do not match the pinned source');
+  const staged = path.join(projectRoot, 'src-tauri/binaries', `${name}-${bundle.target}`);
+  if (digest(await readFile(staged)) !== expectedHash) {
+    throw new Error('Staged tool bytes do not match the pinned source');
   }
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'video-probe-identity-'));
   try {
     const copies = [path.join(temporary, 'packaged'), path.join(temporary, 'source')];
-    await copyFile(bundle.probe, copies[0]);
+    await copyFile(file, copies[0]);
     await copyFile(staged, copies[1]);
     // The pinned Intel binary is unsigned. Its first signature aligns __LINKEDIT
     // with trailing zeroes that codesign retains on removal. Apply the same
@@ -175,7 +176,7 @@ async function verifiedProbeBytes(bundle) {
       unsignedMachODigest(await readFile(copies[0])) !==
       unsignedMachODigest(await readFile(copies[1]))
     ) {
-      throw new Error('Packaged FFprobe code differs from the pinned source');
+      throw new Error('Packaged tool code differs from the pinned source');
     }
   } finally {
     await rm(temporary, { recursive: true, force: true });
@@ -186,7 +187,9 @@ export async function verifyVideoBundle(directory, target) {
   if (target !== hostTarget())
     throw new Error('Video bundle must be executed on its native target runner');
   const bundle = await inspectVideoBundle(directory, target);
-  await verifiedProbeBytes(bundle);
+  await verifyToolBytes(bundle, bundle.probe, 'ffprobe', bundle.spec.sha256);
+  const encoders = JSON.parse(await readFile(path.join(projectRoot, 'scripts/subtitle-tools.json'), 'utf8'));
+  await verifyToolBytes(bundle, bundle.encoder, 'ffmpeg', encoders[target].sha256);
   if (bundle.spec.platform === 'darwin') {
     const config = JSON.parse(
       await readFile(path.join(projectRoot, 'src-tauri/tauri.conf.json'), 'utf8'),
@@ -203,6 +206,8 @@ export async function verifyVideoBundle(directory, target) {
     timeout: 10000,
     maxBuffer: MAX_OUTPUT,
   };
+  const encoderVersion = (await execute(bundle.encoder, ['-version'], options)).stdout;
+  assert.match(encoderVersion, /^ffmpeg version /);
   const version = (await execute(bundle.probe, ['-version'], options)).stdout;
   const license = (await execute(bundle.probe, ['-L'], options)).stdout;
   if (

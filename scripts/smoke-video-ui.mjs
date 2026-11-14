@@ -130,6 +130,7 @@ try {
               height: 2160,
               pixel_format: 'yuv420p10le',
               color_transfer: 'smpte2084',
+              can_burn_hdr10: true,
               audio_tracks: [
                 { index: 1, codec: 'eac3', language: 'zho', title: '国语', channels: 6 },
               ],
@@ -170,6 +171,7 @@ try {
               id: 'plan',
               media_id: 'film',
               device_id: args.deviceId,
+              subtitle: args.subtitle,
               mode: 'trial',
               reason: '尚未完成真机格式验证，可试播原文件。',
               can_pause: true,
@@ -187,6 +189,7 @@ try {
               device_id: 'tv',
               title: video.entry.title,
               phase: 'playing',
+              subtitle: video.plan?.subtitle,
               position_ms: 180000,
               duration_ms: 7200000,
               can_pause: true,
@@ -430,8 +433,13 @@ try {
   await page.getByRole('button', { name: '停止影片', exact: true }).click();
   await expect(page.getByRole('button', { name: '停止影片', exact: true })).not.toBeVisible();
   await page.setViewportSize({ width: 1180, height: 850 });
+  await page.getByRole('combobox', {name:'投送字幕'}).click();
+  await page.getByRole('option', {name:/轨道 2/}).click();
+  await page.getByRole('combobox', {name:'字幕处理方式'}).click();
+  await page.getByRole('option', {name:/1080p 兼容模式/}).click();
+  await page.screenshot({path:'test-results/react/video-subtitles.png'});
   await page.getByRole('button', { name: '检查并准备', exact: true }).click();
-  await page.getByRole('button', { name: '试播原文件', exact: true }).click();
+  await page.getByRole('button', { name: '播放字幕版本', exact: true }).click();
   await expect(page.getByRole('button', { name: '暂停影片', exact: true })).toBeVisible();
   await navigation.getByRole('button', { name: '音乐', exact: true }).click();
   await page.getByRole('button', { name: '切换到音乐并播放 晴天', exact: true }).click();

@@ -16,6 +16,7 @@ const entry: VideoInfo = {
   height: 2160,
   pixel_format: 'yuv420p10le',
   color_transfer: null,
+  can_burn_hdr10: false,
   audio_tracks: [{ index: 1, codec: 'aac', language: 'zho', title: null, channels: 2 }],
   subtitle_tracks: [],
 };
@@ -157,6 +158,7 @@ function setup({
           id: 'plan',
           media_id: String(args.mediaId),
           device_id: String(args.deviceId),
+          subtitle: args.subtitle as NonNullable<VideoSnapshot['plan']>['subtitle'],
           mode: 'trial',
           reason: '设备声明未知，可试播。',
           can_pause: true,
@@ -315,6 +317,66 @@ describe('video casting keeps music boundaries intact', () => {
     expect(screen.getByText('原文件直传', { exact: true })).toBeVisible();
     for (const command of ['select_device', 'control', 'start_video_play', 'play_track'])
       expect(app.calls(command)).toHaveLength(0);
+    expect(screen.getByRole('contentinfo', { name: '音乐播放控制' })).toHaveTextContent(
+      '原来的歌曲',
+    );
+  });
+
+  it('prepares the chosen PGS track and invalidates the visible plan after changing subtitle mode', async () => {
+    const app = setup({
+      video: initialVideo({
+        entry: {
+          ...entry,
+          can_burn_hdr10: true,
+          subtitle_tracks: [
+            ...[8, 9].map((index) => ({
+              index,
+              codec: 'hdmv_pgs_subtitle',
+              language: 'chi',
+              title: null,
+              channels: null,
+            })),
+            { index: 4, codec: 'subrip', language: 'eng', title: null, channels: null },
+          ],
+        },
+      }),
+    });
+    await app.ready();
+    await app.open();
+    await chooseTelevision();
+    const select = async (name: string, option: string) => {
+      fireEvent.keyDown(screen.getByRole('combobox', { name }), { key: 'ArrowDown' });
+      await settle();
+      fireEvent.click(screen.getByRole('option', { name: option }));
+      await settle();
+    };
+    await select('投送字幕', '中文 · PGS · 轨道 9');
+    fireEvent.click(screen.getByRole('button', { name: '检查并准备' }));
+    await settle();
+    expect(app.calls('prepare_video_play')[0][1]).toEqual({
+      mediaId: 'film',
+      deviceId: 'tv',
+      subtitle: { index: 9, mode: 'remux' },
+    });
+    expect(screen.getByText('字幕版本已准备')).toBeVisible();
+    await select('字幕处理方式', '合入画面 · 1080p 兼容模式');
+    expect(screen.queryByText('字幕版本已准备')).toBeNull();
+    expect(screen.getByText(/HDR 将转为 SDR/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: '检查并准备' }));
+    await settle();
+    expect(app.calls('prepare_video_play')[1][1]?.subtitle).toEqual({ index: 9, mode: 'burn' });
+    await select('字幕处理方式', '合入画面 · 原分辨率 HDR10');
+    expect(screen.queryByText('字幕版本已准备')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '检查并准备' }));
+    await settle();
+    expect(app.calls('prepare_video_play')[2][1]?.subtitle).toEqual({
+      index: 9,
+      mode: 'burn_hdr10',
+    });
+    await select('投送字幕', '英语 · SUBRIP · 轨道 4');
+    expect(screen.getByRole('combobox', { name: '字幕处理方式' })).toHaveTextContent('保留原画质');
+    expect(screen.queryByText('字幕版本已准备')).toBeNull();
+    expect(app.calls('start_video_play')).toHaveLength(0);
     expect(screen.getByRole('contentinfo', { name: '音乐播放控制' })).toHaveTextContent(
       '原来的歌曲',
     );

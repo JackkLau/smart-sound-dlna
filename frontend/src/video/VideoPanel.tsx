@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Dialog, Icon, Select } from '../components.jsx';
 import { Range } from '../Player.jsx';
 import { formatTime } from '../utils.js';
-import type { VideoDevice, VideoInfo, VideoSession } from './types';
+import SubtitleOptions from './SubtitleOptions';
+import type { SubtitleSelection, VideoDevice, VideoInfo, VideoSession } from './types';
 import { videoMessage, type VideoController } from './useVideo';
 import VideoDiagnostics from './VideoDiagnostics';
 import RecentVideos from './RecentVideos';
@@ -67,7 +68,7 @@ function FileSummary({ entry }: { entry: VideoInfo }) {
       <details className="video-track-details">
         <summary>音轨与字幕信息</summary>
         <p className="field-help">
-          原文件包含全部轨道。当前音轨和字幕由电视选择，请使用电视遥控器切换。
+          可用电视遥控器切换音轨。需要指定字幕时，在「投送字幕」里选择轨道。
         </p>
         <h4>音轨</h4>
         {entry.audio_tracks.length ? (
@@ -100,7 +101,7 @@ function FileSummary({ entry }: { entry: VideoInfo }) {
             ))}
           </ul>
         ) : (
-          <p>未识别内封字幕；当前版本不会发送外挂字幕。</p>
+          <p>未识别内封字幕。</p>
         )}
       </details>
     </div>
@@ -134,9 +135,20 @@ export default function VideoPanel({
   const unavailable = busy || pending || !state.enabled;
   const probing = state.probe?.status === 'running' || state.probe?.status === 'probing';
   const entry = state.entry;
+  const [selection, setSelection] = useState<{
+    id: string;
+    choice: SubtitleSelection | null;
+  } | null>(null);
+  const choice = selection && selection.id === entry?.id ? selection.choice : null;
+  const processing = state.probe?.status === 'subtitles';
+  const sameSubtitle =
+    (state.plan?.subtitle?.index ?? null) === (choice?.index ?? null) &&
+    state.plan?.subtitle?.mode === choice?.mode;
   const targetExists = devices.some((device) => device.id === candidate);
   const plan =
-    state.plan?.media_id === entry?.id && state.plan?.device_id === candidate ? state.plan : null;
+    state.plan?.media_id === entry?.id && state.plan?.device_id === candidate && sameSubtitle
+      ? state.plan
+      : null;
   const active =
     state.session && !['stopped', 'ended', 'failed', 'detached'].includes(state.session.phase);
   const replacing = state.music_active || Boolean(active) || state.owner_kind === 'unknown';
@@ -160,7 +172,7 @@ export default function VideoPanel({
     <main className="video-workspace" aria-labelledby="video-title">
       <div className="library-heading">
         <div>
-          <span className="eyebrow">本地影片 · 原文件直传</span>
+          <span className="eyebrow">本地影片</span>
           <h1 id="video-title" tabIndex={-1}>
             影视投送
           </h1>
@@ -283,26 +295,67 @@ export default function VideoPanel({
           {candidate && !targetExists && (
             <p className="field-error">候选设备已离线，请重新搜索或选择。</p>
           )}
+          {entry && (
+            <SubtitleOptions
+              entry={entry}
+              choice={choice}
+              disabled={unavailable || processing}
+              onChange={(next) => {
+                setSelection({ id: entry.id, choice: next });
+                setConfirm(false);
+              }}
+            />
+          )}
+          {processing && (
+            <div className="video-probe" role="status">
+              <p>
+                正在准备字幕版本
+                {state.probe?.percent != null ? ' · ' + state.probe.percent + '%' : ''}
+              </p>
+              <button
+                type="button"
+                className="text-button"
+                disabled={unavailable}
+                onClick={() => void run('cancel_video_probe', { taskId: state.probe?.task_id })}
+              >
+                取消字幕处理
+              </button>
+            </div>
+          )}
           <button
             ref={candidateRef}
             type="button"
             className="button outline video-prepare"
-            disabled={unavailable || probing || !entry || !targetExists}
+            disabled={unavailable || probing || processing || !entry || !targetExists}
             onClick={() =>
-              void run('prepare_video_play', { mediaId: entry?.id, deviceId: candidate })
+              void run('prepare_video_play', {
+                mediaId: entry?.id,
+                deviceId: candidate,
+                ...(choice ? { subtitle: choice } : {}),
+              })
             }
           >
             检查并准备
           </button>
-          <p className="field-help">仅检查文件与设备，不会发送播放指令。</p>
+          <p className="field-help">
+            {choice ? '准备完成后即可播放。' : '仅检查文件与设备，不会发送播放指令。'}
+          </p>
           {plan && (
             <div className="video-plan" role="status">
-              <h3>{plan.mode === 'blocked' ? '暂时无法播放' : '原文件直传'}</h3>
+              <h3>
+                {plan.mode === 'blocked'
+                  ? '暂时无法播放'
+                  : plan.subtitle
+                    ? '字幕版本已准备'
+                    : '原文件直传'}
+              </h3>
               <p>{plan.reason}</p>
               {plan.mode !== 'blocked' && (
                 <>
                   <p className="field-help">
-                    视频和音频保持原文件内容，电视的实际画面、声音和字幕仍需确认。
+                    {plan.subtitle
+                      ? '已选择字幕轨道 ' + plan.subtitle.index + '，可在电视上确认效果。'
+                      : '视频和音频保持原文件内容，电视的实际画面、声音和字幕仍需确认。'}
                   </p>
                   <button
                     type="button"
@@ -312,9 +365,11 @@ export default function VideoPanel({
                   >
                     {replacing
                       ? '切换并播放影片'
-                      : plan.mode === 'trial'
-                        ? '试播原文件'
-                        : '播放影片'}
+                      : plan.subtitle
+                        ? '播放字幕版本'
+                        : plan.mode === 'trial'
+                          ? '试播原文件'
+                          : '播放影片'}
                   </button>
                 </>
               )}
@@ -330,7 +385,20 @@ export default function VideoPanel({
           </p>
           <ul>
             <li>播放指令：{state.session.command_accepted ? '电视已接受' : '尚未确认'}</li>
-            <li>原文件：{state.session.http_requested ? '电视已请求读取' : '尚未收到读取请求'}</li>
+            <li>
+              {state.session.subtitle ? '字幕版本' : '原文件'}：
+              {state.session.http_requested ? '电视已请求读取' : '尚未收到读取请求'}
+            </li>
+            {state.session.subtitle && (
+              <li>
+                字幕轨道 {state.session.subtitle.index} ·{' '}
+                {state.session.subtitle.mode === 'remux'
+                  ? '默认、强制字幕'
+                  : state.session.subtitle.mode === 'burn_hdr10'
+                    ? '已合入原分辨率 HDR10 画面'
+                    : '已合入 1080p 画面'}
+              </li>
+            )}
             <li>画面和声音：请在电视上确认，读取数据不等于已经正常播放。</li>
           </ul>
           <VideoDiagnostics
@@ -349,7 +417,7 @@ export default function VideoPanel({
       />
       <p className="local-note">
         <span className="status-dot" />
-        电脑与应用需保持运行。此版本不转换影片，也不自动播放下一部。
+        投送期间请保持电脑和应用运行。
       </p>
       <Dialog
         id="video-switch-dialog"

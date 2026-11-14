@@ -31,6 +31,7 @@ async function fixture(target = 'aarch64-apple-darwin') {
   const main = path.join(executableDir, `xiaomi-dlna-desktop${mac ? '' : '.exe'}`);
   const bytes = mac ? macho(target.startsWith('aarch64') ? 0x0100000c : 0x01000007) : pe();
   await writeFile(probe, bytes);
+  await writeFile(path.join(executableDir, mac ? 'ffmpeg' : 'ffmpeg.exe'), bytes);
   await writeFile(main, bytes);
   const specs = JSON.parse(
     await readFile(path.join(__dirname, '../scripts/video-tools.json'), 'utf8'),

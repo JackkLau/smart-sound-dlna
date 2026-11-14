@@ -69,6 +69,7 @@ jobs:
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib native_process_round_trip -- --ignored
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked --test video_probe_native -- --ignored
       - run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib packaged_ffprobe_restores_recent_video -- --ignored
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked --lib packaged_subtitles_reach_renderer -- --ignored
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
       - name: Clear stale preview bundles
         run: |

@@ -306,6 +306,7 @@ pub struct Engine {
     media: MediaServer,
     player: AsyncMutex<Player>,
     video: AsyncMutex<VideoRuntime>,
+    subtitle_work_dir: PathBuf,
     video_catalog: Option<Arc<Mutex<crate::video_catalog::VideoCatalog>>>,
     actions: AsyncMutex<()>,
     discovery: AsyncMutex<()>,
@@ -326,6 +327,7 @@ impl Engine {
     ) -> Result<Arc<Self>, String> {
         let downloads = Downloader::new(&data_dir)?;
         let voice = VoiceService::new()?;
+        let subtitle_work_dir = data_dir.join("subtitle-work");
         let video_data_dir = data_dir.clone();
         let library = tokio::task::spawn_blocking(move || Library::load(data_dir))
             .await
@@ -355,6 +357,7 @@ impl Engine {
             media,
             player: AsyncMutex::new(Player::default()),
             video: AsyncMutex::new(VideoRuntime::new(video_enabled, catalog_snapshot)),
+            subtitle_work_dir,
             video_catalog,
             actions: AsyncMutex::new(()),
             discovery: AsyncMutex::new(()),

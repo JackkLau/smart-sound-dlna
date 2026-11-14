@@ -185,9 +185,21 @@ async fn cancel_video_probe(
 async fn prepare_video_play(
     media_id: String,
     device_id: String,
+    subtitle: Option<crate::video_subtitles::SubtitleSelection>,
     state: State<'_, AppState>,
 ) -> Result<VideoSnapshot, String> {
-    state.engine.prepare_video_play(&media_id, &device_id).await
+    if let Some(choice) = subtitle {
+        let tool = (
+            crate::video_tools::ffmpeg_path()?,
+            crate::video_tools::ffprobe_path()?,
+        );
+        state
+            .engine
+            .prepare_video_variant(&media_id, &device_id, Some((choice, tool)))
+            .await
+    } else {
+        state.engine.prepare_video_play(&media_id, &device_id).await
+    }
 }
 
 #[tauri::command]
