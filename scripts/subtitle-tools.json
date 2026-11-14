@@ -1,0 +1,20 @@
+{
+  "aarch64-apple-darwin": {
+    "url": "https://files.pythonhosted.org/packages/40/5c/f3d8a657d362cc93b81aab8feda487317da5b5d31c0e1fdfd5e986e55d17/imageio_ffmpeg-0.6.0-py3-none-macosx_11_0_arm64.whl",
+    "wheel_sha256": "b1ae3173414b5fc5f538a726c4e48ea97edc0d2cdc11f103afee655c463fa742",
+    "member": "imageio_ffmpeg/binaries/ffmpeg-macos-aarch64-v7.1",
+    "sha256": "6d175a4743ca50256e89a8cdd731100f9cee33bd79aeea46894d209410dc6617"
+  },
+  "x86_64-apple-darwin": {
+    "url": "https://files.pythonhosted.org/packages/be/3d/df5dc571520f495ba2152215cd26deebd46e1530eae0261f503bfd137e99/imageio_ffmpeg-0.5.1-py3-none-macosx_10_9_intel.macosx_10_9_x86_64.macosx_10_10_intel.macosx_10_10_x86_64.whl",
+    "wheel_sha256": "1460e84712b9d06910c1f7bb524096b0341d4b7844cea6c20e099d0a24e795b1",
+    "member": "imageio_ffmpeg/binaries/ffmpeg-osx64-v4.2.2",
+    "sha256": "90f6392289f808a3a356bceeb4c2a2f0e882d3918aea3840f6611ad48c26b760"
+  },
+  "x86_64-pc-windows-msvc": {
+    "url": "https://files.pythonhosted.org/packages/2c/c6/fa760e12a2483469e2bf5058c5faff664acf66cadb4df2ad6205b016a73d/imageio_ffmpeg-0.6.0-py3-none-win_amd64.whl",
+    "wheel_sha256": "02fa47c83703c37df6bfe4896aab339013f62bf02c5ebf2dce6da56af04ffc0a",
+    "member": "imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe",
+    "sha256": "2ce797a0f88d7f067180338fb227f7b1928ea727bd9a4d7a1d022f7c52af71a3"
+  }
+}

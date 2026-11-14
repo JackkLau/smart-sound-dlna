@@ -9,10 +9,12 @@ pub mod media;
 pub mod mobile;
 mod mobile_pairing;
 mod online;
+mod subtitle_cache;
 mod track_names;
 pub mod video;
 mod video_catalog;
 mod video_diagnostics;
+pub mod video_subtitles;
 #[cfg(feature = "desktop")]
 mod video_tools;
 pub mod voice;

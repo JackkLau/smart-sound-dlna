@@ -1,5 +1,6 @@
 //! Video is an additive domain. The existing actions mutex owns every renderer mutation.
 use super::*;
+use crate::video_subtitles::{self, SubtitleMode, SubtitleSelection};
 use crate::{
     dlna::VideoDescriptor,
     media::VideoTransferMonitor,
@@ -7,6 +8,7 @@ use crate::{
     video_catalog::{self, CatalogSnapshot, RecentVideo, SavedProgress},
     video_diagnostics::{SessionTrace, VideoDiagnostics},
 };
+use std::sync::atomic::{AtomicU8, Ordering as AtomicOrdering};
 
 const MUSIC_BUSY: &str =
     "ACTIVE_SESSION_CONFLICT：当前正在影视播放或核对播放状态，请先在电脑切换到音乐。";
@@ -20,6 +22,7 @@ pub struct PlaybackContext {
 
 #[derive(Clone, Serialize)]
 pub struct ProbeSnapshot {
+    pub percent: Option<u8>,
     pub task_id: String,
     pub status: String,
     pub error: Option<String>,
@@ -27,6 +30,7 @@ pub struct ProbeSnapshot {
 
 #[derive(Clone, Serialize)]
 pub struct VideoPlan {
+    pub subtitle: Option<SubtitleSelection>,
     pub id: String,
     pub media_id: String,
     pub device_id: String,
@@ -38,6 +42,7 @@ pub struct VideoPlan {
 
 #[derive(Clone, Serialize)]
 pub struct VideoSession {
+    pub subtitle: Option<SubtitleSelection>,
     pub id: String,
     pub generation: u64,
     pub media_id: String,
@@ -71,6 +76,7 @@ pub struct VideoSnapshot {
 }
 
 struct Prepared {
+    original: VideoSource,
     view: VideoPlan,
     source: VideoSource,
     device: Device,
@@ -98,6 +104,7 @@ pub(super) struct VideoRuntime {
     entry: Option<VideoSource>,
     probe: Option<ProbeSnapshot>,
     probe_cancel: Option<CancellationToken>,
+    subtitle_progress: Option<Arc<AtomicU8>>,
     plan: Option<Prepared>,
     session: Option<RunningVideo>,
     owner_kind: &'static str,
@@ -114,6 +121,7 @@ impl VideoRuntime {
             entry: None,
             probe: None,
             probe_cancel: None,
+            subtitle_progress: None,
             plan: None,
             session: None,
             owner_kind: "none",
@@ -210,7 +218,13 @@ impl Engine {
         VideoSnapshot {
             enabled: video.enabled,
             entry: video.entry.as_ref().map(|source| source.info.clone()),
-            probe: video.probe.clone(),
+            probe: video.probe.clone().map(|mut probe| {
+                probe.percent = video
+                    .subtitle_progress
+                    .as_ref()
+                    .map(|p| p.load(AtomicOrdering::Relaxed));
+                probe
+            }),
             plan: video.plan.as_ref().map(|plan| plan.view.clone()),
             session: video.session.as_ref().map(|session| {
                 let mut view = session.view.clone();
@@ -249,10 +263,12 @@ impl Engine {
             if let Some(previous) = video.probe_cancel.take() {
                 previous.cancel();
             }
+            video.subtitle_progress = None;
             video.entry = None;
             video.plan = None;
             video.error = None;
             video.probe = Some(ProbeSnapshot {
+                percent: None,
                 task_id: task_id.clone(),
                 status: "probing".into(),
                 error: None,
@@ -414,6 +430,7 @@ impl Engine {
             }
             if let Some(cancel) = state.probe_cancel.take() {
                 cancel.cancel();
+                state.subtitle_progress = None;
                 if let Some(probe) = state.probe.as_mut() {
                     probe.status = "cancelled".into();
                 }
@@ -423,54 +440,140 @@ impl Engine {
     }
 
     pub async fn prepare_video_play(
-        &self,
+        self: &Arc<Self>,
         media_id: &str,
         device_id: &str,
     ) -> Result<VideoSnapshot, String> {
+        self.prepare_video_variant(media_id, device_id, None).await
+    }
+
+    pub async fn prepare_video_variant(
+        self: &Arc<Self>,
+        media_id: &str,
+        device_id: &str,
+        subtitle: Option<(SubtitleSelection, (PathBuf, PathBuf))>,
+    ) -> Result<VideoSnapshot, String> {
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let cancel = self.shutdown.child_token();
+        let percent = Arc::new(AtomicU8::new(0));
         let source = {
-            let state = self.video.lock().await;
+            let mut state = self.video.lock().await;
             state.require_enabled()?;
-            state
+            let source = state
                 .entry
                 .as_ref()
-                .filter(|entry| entry.info.id == media_id)
+                .filter(|e| e.info.id == media_id)
                 .cloned()
-                .ok_or("SOURCE_CHANGED：请先选择并分析影片。")?
+                .ok_or("SOURCE_CHANGED：请先选择并分析影片。")?;
+            if let Some((choice, _)) = &subtitle {
+                video_subtitles::codec(&source, *choice)?;
+            }
+            if let Some(previous) = state.probe_cancel.take() {
+                previous.cancel();
+            }
+            state.plan = None;
+            state.error = None;
+            state.probe_cancel = Some(cancel.clone());
+            state.probe = Some(ProbeSnapshot {
+                task_id: task_id.clone(),
+                percent: None,
+                status: if subtitle.is_some() {
+                    "subtitles"
+                } else {
+                    "checking"
+                }
+                .into(),
+                error: None,
+            });
+            state.subtitle_progress = subtitle.as_ref().map(|_| percent.clone());
+            source
         };
-        let device = self.video_target(device_id).await?;
-        let source_check = source.clone();
-        tokio::task::spawn_blocking(move || source_check.open())
-            .await
-            .map_err(|error| error.to_string())??;
-        let route_device = device.clone();
-        tokio::task::spawn_blocking(move || local_address(&route_device))
-            .await
-            .map_err(|error| error.to_string())??;
-        let caps = Controller::new(device.clone())
-            .read_video_capabilities()
-            .await?;
-        let mut state = self.video.lock().await;
-        if state.entry.as_ref().map(|entry| entry.info.id.as_str()) != Some(media_id) {
-            return Err("SOURCE_CHANGED：分析期间选择的影片已改变。".into());
+        let engine = self.clone();
+        let device_id = device_id.to_owned();
+        let background = subtitle.is_some();
+        let prepare = async move {
+            let result = async {
+                let device = engine.video_target(&device_id).await?;
+                let original = source.clone();
+                let route_device = device.clone();
+                tokio::task::spawn_blocking(move || {
+                    original.open()?;
+                    local_address(&route_device)
+                })
+                .await
+                .map_err(|error| error.to_string())??;
+                let caps = Controller::new(device.clone())
+                    .read_video_capabilities()
+                    .await?;
+                let choice = subtitle.as_ref().map(|(choice, _)| *choice);
+                let resource = if let Some((choice, tool)) = subtitle {
+                    video_subtitles::prepare(
+                        &source,
+                        choice,
+                        tool,
+                        &cancel,
+                        &percent,
+                        &engine.subtitle_work_dir,
+                    )
+                    .await?
+                } else {
+                    source.clone()
+                };
+                let reason = match choice.map(|c| c.mode) {
+                    Some(SubtitleMode::Remux) => {
+                        "已保留原画面和音轨，并将所选字幕设为唯一的默认、强制字幕轨。".into()
+                    }
+                    Some(SubtitleMode::Burn) => "所选字幕已合入 1080p 画面，原音轨已复制。".into(),
+                    Some(SubtitleMode::BurnHdr10) => {
+                        "所选字幕已合入原分辨率 HDR10 画面，原音轨已复制。".into()
+                    }
+                    None => caps.reason.unwrap_or_else(|| {
+                        "尚未完成真机格式验证，可试播原文件；不会转换画质或音轨。".into()
+                    }),
+                };
+                Ok::<_, String>(Prepared {
+                    view: VideoPlan {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        media_id: source.info.id.clone(),
+                        device_id,
+                        mode: "trial".into(),
+                        reason,
+                        subtitle: choice,
+                        can_pause: caps.can_pause,
+                        can_seek: caps.can_seek,
+                    },
+                    original: source,
+                    source: resource,
+                    device_stamp: device_stamp(&device),
+                    device,
+                })
+            }
+            .await;
+            let mut state = engine.video.lock().await;
+            if cancel.is_cancelled() || state.probe.as_ref().map(|p| &p.task_id) != Some(&task_id) {
+                return Err("STALE_SESSION：准备任务已取消或替换。".into());
+            }
+            state.probe_cancel = None;
+            state.subtitle_progress = None;
+            let probe = state.probe.as_mut().expect("checked task ID");
+            match result {
+                Ok(prepared) => {
+                    probe.status = "ready".into();
+                    state.plan = Some(prepared);
+                    Ok(())
+                }
+                Err(error) => {
+                    probe.status = "failed".into();
+                    probe.error = Some(error.clone());
+                    Err(error)
+                }
+            }
+        };
+        if background {
+            tokio::spawn(prepare);
+        } else {
+            prepare.await?;
         }
-        state.plan = Some(Prepared {
-            view: VideoPlan {
-                id: uuid::Uuid::new_v4().to_string(),
-                media_id: media_id.into(),
-                device_id: device_id.into(),
-                mode: "trial".into(),
-                reason: caps.reason.unwrap_or_else(|| {
-                    "尚未完成真机格式验证，可试播原文件；不会转换画质或音轨。".into()
-                }),
-                can_pause: caps.can_pause,
-                can_seek: caps.can_seek,
-            },
-            source,
-            device_stamp: device_stamp(&device),
-            device,
-        });
-        state.error = None;
-        drop(state);
         Ok(self.video_state().await)
     }
 
@@ -564,7 +667,7 @@ impl Engine {
         replace_current: bool,
     ) -> Result<VideoSnapshot, String> {
         // Preparation is read-only and does not hold the music mutation lock.
-        let (source, device, stamp, plan) = {
+        let (source, original, device, stamp, plan) = {
             let state = self.video.lock().await;
             state.require_enabled()?;
             let prepared = state
@@ -574,6 +677,7 @@ impl Engine {
                 .ok_or("STALE_SESSION：播放计划已失效，请重新准备。")?;
             (
                 prepared.source.clone(),
+                prepared.original.clone(),
                 prepared.device.clone(),
                 prepared.device_stamp.clone(),
                 prepared.view.clone(),
@@ -591,9 +695,14 @@ impl Engine {
             return Err("TARGET_UNAVAILABLE：设备地址已经改变，请重新准备。".into());
         }
         let source_check = source.clone();
-        tokio::task::spawn_blocking(move || source_check.open())
-            .await
-            .map_err(|error| error.to_string())??;
+        tokio::task::spawn_blocking(move || {
+            if source_check.temporary.is_some() {
+                original.open()?;
+            }
+            source_check.open()
+        })
+        .await
+        .map_err(|error| error.to_string())??;
         let route_device = device.clone();
         let host = tokio::task::spawn_blocking(move || local_address(&route_device))
             .await
@@ -621,6 +730,7 @@ impl Engine {
             let trace = SessionTrace::new();
             state.session = Some(RunningVideo {
                 view: VideoSession {
+                    subtitle: plan.subtitle,
                     id: uuid::Uuid::new_v4().to_string(),
                     generation: state.owner_revision,
                     media_id: source.info.id.clone(),
@@ -852,6 +962,7 @@ impl Engine {
             "duration_ms": session.view.duration_ms,
             "command_accepted": session.view.command_accepted,
             "http_requested": session.view.http_requested || diagnostics.transfer.bytes_streamed != "0",
+            "subtitle": session.view.subtitle,
             "media": {
                 "container": session.media.format,
                 "video_codec": codec,

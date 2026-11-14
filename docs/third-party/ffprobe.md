@@ -1,6 +1,6 @@
 # FFprobe 工具来源
 
-影视试用版本仅分发独立 FFprobe，不分发 FFmpeg 编码工具，也不使用 Node 作为运行时。
+影视试用版本使用独立的 FFprobe 读取轨道，使用 FFmpeg 生成字幕版本。两者均随包提供。
 
 安装来源固定为 @ffprobe-installer/ffprobe 2.1.2。平台包版本与原始二进制 SHA-256 记录在 scripts/video-tools.json，npm 包完整性记录在 package-lock.json。准备脚本先检查包名、版本和二进制校验值，再运行已校验的本机工具。
 
@@ -24,3 +24,9 @@ Mac 打包会重签名 FFprobe，因此直接比较成品完整 SHA-256 无法�
 预览工作流在 GitHub 托管的临时 Windows runner 中运行 NSIS 安装到含空格/中文的随机目录，拒绝已有同名安装或正在运行的应用；验证实际安装路径后卸载并清理该临时目录。安装过程不传自动启动标记，也不运行主程序。该步骤不允许在本地电脑或自托管 runner 自动运行。NSIS 的参数规则见[官方命令行文档](https://nsis.sourceforge.io/Docs/Chapter3.html)；当前 Tauri 的静默安装、禁用快捷方式及运行开关见 [CLI 2.12.4 安装器模板](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi)。
 
 新增 CI 步骤尚需实际 Windows 云端执行，脚本及模拟文件布局测试不能代替 Windows 安装、WebView 或电视播放验收。
+
+## 字幕用 FFmpeg
+
+Apple Silicon 和 Windows x64 使用 imageio-ffmpeg 0.6.0 提供的 FFmpeg 7.1。Intel Mac 使用 imageio-ffmpeg 0.5.1 提供的 FFmpeg 4.2.2。清单 `scripts/subtitle-tools.json` 固定每个压缩包的地址、成员名及两层 SHA-256。构建时使用 Python 3 标准库提取该成员。桌面运行时直接启动本机二进制。包内附 GPL 许可文本，具体平台的编译配置与许可可分别用 `ffmpeg -version` 和 `ffmpeg -L` 查看。
+
+[ImageIO 二进制来源与构建说明](https://github.com/imageio/imageio-ffmpeg) · [FFmpeg 对应版本源代码](https://ffmpeg.org/releases/)。

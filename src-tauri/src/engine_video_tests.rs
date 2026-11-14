@@ -1550,3 +1550,301 @@ async fn explicit_stop_and_music_handoff_flush_latest_confirmed_video_sample() {
         );
     }
 }
+
+#[cfg(feature = "desktop")]
+#[tokio::test]
+#[ignore = "requires the hash-verified native video tools"]
+async fn packaged_subtitles_reach_renderer_and_keep_music_until_handoff() {
+    use crate::{
+        video_subtitles::{SubtitleMode, SubtitleSelection},
+        video_tools,
+    };
+    let fixture = Fixture::new().await;
+    let probe = video_tools::ffprobe_path().unwrap();
+    let encoder = video_tools::ffmpeg_path().unwrap();
+    let samples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    fixture.engine.play(&fixture.track_id).await.unwrap();
+    let mut expected_owner = "audio";
+    for (mode, index) in [
+        (SubtitleMode::Remux, 3),
+        (SubtitleMode::Burn, 3),
+        (SubtitleMode::Burn, 2),
+        #[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+        (SubtitleMode::BurnHdr10, 3),
+    ] {
+        let source = samples.join(if mode == SubtitleMode::BurnHdr10 {
+            "generated-subtitles-hdr10.mkv"
+        } else {
+            "generated-subtitles.mkv"
+        });
+        let movie =
+            crate::video::probe_file(source.clone(), probe.clone(), CancellationToken::new())
+                .await
+                .unwrap();
+        fixture.engine.set_video_source_for_test(movie).await;
+        let id = fixture.engine.video_state().await.entry.unwrap().id;
+        let choice = SubtitleSelection { mode, index };
+        let before = fixture.actions();
+        fixture
+            .engine
+            .prepare_video_variant(
+                &id,
+                &fixture.device_id,
+                Some((choice, (encoder.clone(), probe.clone()))),
+            )
+            .await
+            .unwrap();
+        let ready = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let state = fixture.engine.video_state().await;
+                assert_ne!(
+                    state.probe.as_ref().unwrap().status,
+                    "failed",
+                    "{:?}",
+                    state.probe.as_ref().unwrap().error
+                );
+                if state.plan.is_some() {
+                    break state;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(fixture.actions(), before);
+        assert_eq!(ready.owner_kind, expected_owner);
+        let plan = ready.plan.unwrap();
+        assert_eq!(plan.subtitle, Some(choice));
+        let state = fixture
+            .engine
+            .start_video_play(&plan.id, ready.owner_revision, true)
+            .await
+            .unwrap();
+        let view = state.session.unwrap();
+        assert_eq!(view.subtitle, Some(choice));
+        assert!(view.http_requested);
+        let copy = fixture.directory.path().join("received.mkv");
+        std::fs::write(&copy, &fixture.renderer.lock().unwrap().received).unwrap();
+        let info = crate::video::probe_file(copy.clone(), probe.clone(), CancellationToken::new())
+            .await
+            .unwrap()
+            .info;
+        assert_eq!(info.audio_tracks.len(), 1);
+        if mode == SubtitleMode::Remux {
+            assert_eq!(info.width, Some(320));
+            assert_eq!(info.subtitle_tracks.len(), 1);
+            assert_eq!(
+                info.subtitle_tracks[0].codec.as_deref(),
+                Some("hdmv_pgs_subtitle")
+            );
+            for selector in ["v", "a"] {
+                let hash = |path: &std::path::Path| {
+                    let out = std::process::Command::new(&encoder)
+                        .args(["-loglevel", "error", "-i"])
+                        .arg(path)
+                        .args([
+                            "-map",
+                            &format!("0:{selector}"),
+                            "-c",
+                            "copy",
+                            "-f",
+                            "hash",
+                            "-",
+                        ])
+                        .output()
+                        .unwrap();
+                    assert!(out.status.success());
+                    out.stdout
+                };
+                assert_eq!(hash(&source), hash(&copy));
+            }
+            let flags = std::process::Command::new(&probe)
+                .args([
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "s",
+                    "-show_entries",
+                    "stream_disposition=default,forced",
+                    "-of",
+                    "json",
+                ])
+                .arg(&copy)
+                .output()
+                .unwrap();
+            let json: Value = serde_json::from_slice(&flags.stdout).unwrap();
+            for flag in ["default", "forced"] {
+                assert_eq!(json["streams"][0]["disposition"][flag], 1);
+            }
+        } else {
+            if mode == SubtitleMode::BurnHdr10 {
+                assert_eq!((info.width, info.height), (Some(320), Some(180)));
+                assert_eq!(info.color_transfer.as_deref(), Some("smpte2084"));
+                assert_eq!(info.video_codec.as_deref(), Some("hevc"));
+                assert_eq!(info.pixel_format.as_deref(), Some("yuv420p10le"));
+                assert!(info.can_burn_hdr10);
+                let metadata = |file: &std::path::Path| {
+                    let out = std::process::Command::new(&probe)
+                        .args([
+                            "-v",
+                            "error",
+                            "-select_streams",
+                            "V:0",
+                            "-read_intervals",
+                            "%+#8",
+                            "-show_frames",
+                            "-of",
+                            "json",
+                        ])
+                        .arg(file)
+                        .output()
+                        .unwrap();
+                    assert!(out.status.success());
+                    let json: Value = serde_json::from_slice(&out.stdout).unwrap();
+                    json["frames"][0]["side_data_list"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|value| {
+                            matches!(
+                                value["side_data_type"].as_str(),
+                                Some("Mastering display metadata" | "Content light level metadata")
+                            )
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>()
+                };
+                let original = metadata(&source);
+                assert_eq!(original.len(), 2);
+                assert_eq!(metadata(&copy), original);
+            } else {
+                assert_eq!(info.height, Some(1080));
+            }
+            assert!(info.subtitle_tracks.is_empty());
+            // The source is black. The PGS rectangle and text each create bright pixels only while their cue is visible.
+            let pixels = |time: &str| {
+                let out = std::process::Command::new(&encoder)
+                    .args(["-loglevel", "error", "-ss", time, "-i"])
+                    .arg(&copy)
+                    .args([
+                        "-map",
+                        "0:v:0",
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        "scale=320:180",
+                        "-pix_fmt",
+                        "gray",
+                        "-f",
+                        "rawvideo",
+                        "-",
+                    ])
+                    .output()
+                    .unwrap();
+                assert!(out.status.success());
+                assert_eq!(
+                    out.stdout.len(),
+                    320 * 180,
+                    "missing frame {time} for {choice:?}"
+                );
+                out.stdout.into_iter().filter(|&v| v > 100).count()
+            };
+            assert!(pixels("0.5") > 10);
+            assert_eq!(pixels("1.0"), 0);
+        }
+        let uri = fixture.renderer.lock().unwrap().uri.clone();
+        fixture
+            .engine
+            .control_video(&view.id, view.generation, "stop", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            reqwest::get(uri).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+        expected_owner = "none";
+    }
+    assert_eq!(
+        std::fs::read_dir(&fixture.engine.subtitle_work_dir)
+            .unwrap()
+            .count(),
+        1,
+        "only the directory lock can remain"
+    );
+}
+
+#[cfg(all(unix, feature = "desktop"))]
+#[tokio::test]
+async fn cancelling_subtitle_preparation_revokes_partial_file_and_keeps_music() {
+    use crate::{
+        video::VideoTrackInfo,
+        video_subtitles::{SubtitleMode, SubtitleSelection},
+    };
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new().await;
+    let mut movie =
+        crate::video::VideoSource::open_import(fixture.directory.path().join("film.mkv")).unwrap();
+    movie.info.subtitle_tracks.push(VideoTrackInfo {
+        index: 8,
+        codec: Some("hdmv_pgs_subtitle".into()),
+        language: Some("chi".into()),
+        title: None,
+        channels: None,
+    });
+    fixture.engine.set_video_source_for_test(movie).await;
+    let id = fixture.engine.video_state().await.entry.unwrap().id;
+    fixture.engine.play(&fixture.track_id).await.unwrap();
+    let before = fixture.actions();
+    let tool = fixture.directory.path().join("slow-ffmpeg");
+    std::fs::write(
+        &tool,
+        b"#!/bin/sh\nprintf partial > movie.mkv\nexec /bin/sleep 30\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let state = fixture
+        .engine
+        .prepare_video_variant(
+            &id,
+            &fixture.device_id,
+            Some((
+                SubtitleSelection {
+                    index: 8,
+                    mode: SubtitleMode::Remux,
+                },
+                (tool.clone(), tool),
+            )),
+        )
+        .await
+        .unwrap();
+    let root = &fixture.engine.subtitle_work_dir;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !std::fs::read_dir(root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|e| e.path().join("movie.mkv").is_file())
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let cancelled = fixture
+        .engine
+        .cancel_video_probe(&state.probe.unwrap().task_id)
+        .await
+        .unwrap();
+    assert_eq!(cancelled.probe.unwrap().status, "cancelled");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while std::fs::read_dir(root).unwrap().count() != 1 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let final_state = fixture.engine.video_state().await;
+    assert!(final_state.plan.is_none());
+    assert_eq!(final_state.owner_kind, "audio");
+    assert_eq!(before, fixture.actions());
+}

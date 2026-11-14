@@ -1,8 +1,10 @@
 {
   "bundle": {
-    "externalBin": ["binaries/ffprobe"],
+    "externalBin": ["binaries/ffprobe", "binaries/ffmpeg"],
     "resources": {
       "binaries/ffprobe-manifest.json": "ffprobe-manifest.json",
+      "../docs/third-party/ffmpeg-GPL-2.0.txt": "licenses/ffmpeg-GPL-2.0.txt",
+      "../docs/third-party/ffmpeg-GPL-3.0.txt": "licenses/ffmpeg-GPL-3.0.txt",
       "../docs/third-party/ffprobe.md": "licenses/ffprobe.md"
     }
   }

@@ -32,6 +32,7 @@ pub struct VideoInfo {
     pub height: Option<u32>,
     pub pixel_format: Option<String>,
     pub color_transfer: Option<String>,
+    pub can_burn_hdr10: bool,
     pub audio_tracks: Vec<VideoTrackInfo>,
     pub subtitle_tracks: Vec<VideoTrackInfo>,
 }
@@ -59,6 +60,7 @@ impl SourceStamp {
 
 #[derive(Clone, Debug)]
 pub struct VideoSource {
+    pub(crate) temporary: Option<std::sync::Arc<crate::subtitle_cache::Workspace>>,
     pub info: VideoInfo,
     path: PathBuf,
     identity: FileIdentity,
@@ -93,6 +95,7 @@ impl VideoSource {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "影片".into());
         let source = Self {
+            temporary: None,
             info: VideoInfo {
                 id: uuid::Uuid::new_v4().to_string(),
                 title,
@@ -104,6 +107,7 @@ impl VideoSource {
                 height: None,
                 pixel_format: None,
                 color_transfer: None,
+                can_burn_hdr10: false,
                 audio_tracks: vec![],
                 subtitle_tracks: vec![],
             },
@@ -256,7 +260,7 @@ async fn probe_with_limits(
         "-v", "error", "-protocol_whitelist", "file", "-format_whitelist", "mov,matroska,mpegts",
         "-enable_drefs", "0", "-use_absolute_path", "0", "-print_format", "json",
         "-show_format", "-show_streams", "-show_chapters", "-show_entries",
-        "format=format_name,duration:stream=index,codec_type,codec_name,width,height,pix_fmt,color_transfer,channels,duration:stream_tags=language,title:stream_disposition=attached_pic:chapter=id,start_time,end_time",
+        "format=format_name,duration:stream=index,codec_type,codec_name,width,height,pix_fmt,color_transfer,color_space,color_range,color_primaries,channels,duration:stream_tags=language,title:stream_disposition=attached_pic:chapter=id,start_time,end_time",
         "-i",
     ]).arg(&source.path).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     #[cfg(windows)]
@@ -364,6 +368,18 @@ fn apply_probe(source: &mut VideoSource, json: &[u8]) -> Result<(), String> {
     source.info.height = u32_field(video, "height");
     source.info.pixel_format = string_field(video, "pix_fmt");
     source.info.color_transfer = string_field(video, "color_transfer");
+    // These packages include the FFmpeg 7.1 10-bit overlay and HDR10 encoder.
+    source.info.can_burn_hdr10 = cfg!(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "windows", target_arch = "x86_64")
+    )) && source.info.color_transfer.as_deref() == Some("smpte2084")
+        && source.info.pixel_format.as_deref() == Some("yuv420p10le")
+        && video["color_space"] == "bt2020nc"
+        && video["color_primaries"] == "bt2020"
+        && video["color_range"] == "tv"
+        && [source.info.width, source.info.height]
+            .iter()
+            .all(|n| n.is_some_and(|v| v >= 16 && v % 2 == 0));
     let tracks = |kind: &str| {
         streams
             .iter()
