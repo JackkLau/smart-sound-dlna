@@ -517,9 +517,44 @@ fn network_interfaces() -> Result<Vec<NetworkInterface>, String> {
     Ok(found)
 }
 
+#[cfg(windows)]
+fn ignore_udp_port_unreachable(socket: &Socket) -> std::io::Result<()> {
+    use std::{mem::size_of_val, os::windows::io::AsRawSocket, ptr};
+    use windows_sys::Win32::Networking::WinSock::{
+        WSAGetLastError, WSAIoctl, SIO_UDP_CONNRESET, SOCKET_ERROR,
+    };
+
+    // SSDP collects replies from many peers. An ICMP port-unreachable from one
+    // peer must not reset the shared reply socket before the broadcast retry.
+    let report_reset = 0i32;
+    let mut bytes_returned = 0;
+    // SAFETY: the socket and both buffers remain valid for this synchronous call.
+    let status = unsafe {
+        WSAIoctl(
+            socket.as_raw_socket() as usize,
+            SIO_UDP_CONNRESET,
+            ptr::from_ref(&report_reset).cast(),
+            size_of_val(&report_reset) as u32,
+            ptr::null_mut(),
+            0,
+            &mut bytes_returned,
+            ptr::null_mut(),
+            None,
+        )
+    };
+    if status == SOCKET_ERROR {
+        return Err(std::io::Error::from_raw_os_error(unsafe {
+            WSAGetLastError()
+        }));
+    }
+    Ok(())
+}
+
 fn discovery_socket(interface: Ipv4Addr) -> Result<UdpSocket, String> {
     let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
         .map_err(|error| format!("无法创建发现连接：{error}"))?;
+    #[cfg(windows)]
+    ignore_udp_port_unreachable(&socket).map_err(|error| error.to_string())?;
     socket
         .set_nonblocking(true)
         .map_err(|error| error.to_string())?;
@@ -1825,7 +1860,7 @@ mod tests {
             Duration::from_millis(30),
         )
         .await;
-        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates.len(), 1, "{:?}", result.warnings);
         assert_eq!(result.candidates[0].location, "http://127.0.0.1:1722/");
         task.await.unwrap();
     }
