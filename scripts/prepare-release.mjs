@@ -38,7 +38,18 @@ export async function prepareRelease(input, output, { version, sha, runUrl }) {
   await mkdir(output, { recursive: true });
   for (const item of packages) await writeFile(path.join(output, item.name), item.bytes, { flag: 'wx' });
   await writeFile(path.join(output, 'SHA256SUMS'), packages.map(item => `${item.sha256}  ${item.name}\n`).join(''), { flag: 'wx' });
-  await writeFile(path.join(output, 'release-notes.md'), `小米音乐投送 ${version}\n\n- 更新输入框、下拉菜单、音量与进度控件，保留紧凑布局与固定弹窗标题。\n- 视频导入支持在哔哩哔哩与抖音之间选择，链接可一键清除；保留哔哩哔哩多 P 和收藏夹导入。\n- 抖音公开视频在本地提取 AAC / HE-AAC 音轨为 M4A，支持预览、取消、重试及自动曲名识别。\n- 保留 macOS 完整临时签名与实际 DMG 校验。\n- Windows x64、macOS Apple Silicon 与 Intel 安装包均经过原生测试和构建。\n\n源码：${sha}\n构建记录：${runUrl}\n\nmacOS 使用完整的临时签名（Ad Hoc），尚未通过 Apple 公证；Windows 暂无发行证书签名。Mac 首次安装请先拖到“应用程序”；如提示无法验证开发者，可在“系统设置 → 隐私与安全性”检查并选择“仍要打开”。临时签名不等于 Apple 认证。\n`, { flag: 'wx' });
+  const notes = `小米音乐投送 ${version}
+
+- 音乐可投送到 DLNA 音箱和电视。本版改进了局域网设备发现和电视音乐播放。
+- 在「影视」页选择本地 MP4、MKV 或 M2TS，可查看音轨和字幕轨并将影片直接投送到电视。
+- 粘贴含 BTIH 的磁力链接，选择保存目录。下载完成后点击「载入影片」，即可选择电视播放。
+- 内封字幕可标记为默认轨并保留原画质，也可合入画面输出 1080p。Windows x64 和 Apple Silicon 还支持将 HDR10 影片的 PGS 字幕合入原分辨率画面。默认字幕能否显示取决于电视播放器。
+
+安装包附有 FFmpeg、FFprobe 和相应的许可说明。选择与你的电脑对应的安装包，可用同页的 SHA256SUMS 核对文件。macOS 版本使用 Ad Hoc 签名，尚未经过 Apple 公证。Windows 版本未使用发行证书签名。
+
+源码提交 \`${sha}\` · [构建记录](${runUrl})
+`;
+  await writeFile(path.join(output, 'release-notes.md'), notes, { flag: 'wx' });
   return packages.map(({ name, sha256 }) => ({ name, sha256 }));
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
