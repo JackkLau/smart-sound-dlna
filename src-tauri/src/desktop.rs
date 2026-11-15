@@ -1,3 +1,5 @@
+mod magnet;
+
 use crate::{
     engine::{Engine, Snapshot, VideoSnapshot},
     library::{self, ImportSummary},
@@ -20,6 +22,7 @@ use tauri_plugin_dialog::DialogExt;
 struct AppState {
     engine: Arc<Engine>,
     mobile: crate::mobile::Receiver,
+    magnets: magnet::Downloads,
     picker_busy: Arc<AtomicBool>,
     xiaomi_login: Arc<LoginFlow>,
     bilibili_login: Arc<LoginFlow>,
@@ -120,6 +123,64 @@ async fn get_config(state: State<'_, AppState>) -> Result<Config, String> {
 #[tauri::command]
 async fn get_video_state(state: State<'_, AppState>) -> Result<VideoSnapshot, String> {
     Ok(state.engine.video_state().await)
+}
+
+#[tauri::command]
+async fn video_magnet_start(
+    magnet: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<magnet::Snapshot>, String> {
+    if !state.engine.video_enabled().await {
+        return Err("请在影视版中使用磁力下载。".into());
+    }
+    let link = magnet::MagnetLink::parse(&magnet)?;
+    state.magnets.ensure_available()?;
+    if state.picker_busy.swap(true, Ordering::AcqRel) {
+        return Err("请先完成已打开的文件选择窗口。".into());
+    }
+    let guard = PickerGuard(state.picker_busy.clone());
+    let path = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        app.dialog()
+            .file()
+            .set_title("选择影片下载位置")
+            .blocking_pick_folder()
+            .map(|file| file.into_path().map_err(|_| "保存目录无效。"))
+            .transpose()
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    match path {
+        Some(path) => state.magnets.start(link, path).map(Some),
+        None => Ok(state.magnets.status()),
+    }
+}
+
+#[tauri::command]
+fn video_magnet_status(state: State<'_, AppState>) -> Option<magnet::Snapshot> {
+    state.magnets.status()
+}
+
+#[tauri::command]
+async fn video_magnet_cancel(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<Option<magnet::Snapshot>, String> {
+    state.magnets.cancel(&id).await
+}
+
+#[tauri::command]
+async fn video_magnet_open(
+    id: String,
+    index: usize,
+    state: State<'_, AppState>,
+) -> Result<VideoSnapshot, String> {
+    let file = state.magnets.completed_path(&id, index)?;
+    state
+        .engine
+        .import_video(file, crate::video_tools::ffprobe_path()?)
+        .await
 }
 
 #[tauri::command]
@@ -371,6 +432,10 @@ pub fn run() {
         get_config,
         get_video_state,
         pick_video_file,
+        video_magnet_start,
+        video_magnet_status,
+        video_magnet_cancel,
+        video_magnet_open,
         select_recent_video,
         forget_recent_video,
         cancel_video_probe,
@@ -441,6 +506,7 @@ pub fn run() {
             app.manage(AppState {
                 engine,
                 mobile,
+                magnets: magnet::Downloads::default(),
                 picker_busy: Arc::new(AtomicBool::new(false)),
                 xiaomi_login,
                 bilibili_login,
@@ -465,6 +531,7 @@ pub fn run() {
                 state.xiaomi_login.reset();
                 state.bilibili_login.reset();
                 state.engine.shutdown();
+                tauri::async_runtime::block_on(state.magnets.shutdown());
             }
         }
     });

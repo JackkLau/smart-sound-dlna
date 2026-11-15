@@ -34,6 +34,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": { "../docs/third-party/rqbit.txt": "licenses/rqbit.txt" },
     "shortDescription": "将本地音乐投送到小米 / 小爱 DLNA 音箱",
     "category": "Music",
     "icon": [

@@ -138,6 +138,7 @@ function setup({
     }
     const result = await operation?.(command, args);
     if (result !== undefined) return result;
+    if (command === 'video_magnet_status') return null;
     if (command === 'forget_recent_video')
       data = {
         ...data,
@@ -299,6 +300,7 @@ describe('video casting keeps music boundaries intact', () => {
     await app.ready();
     expect(screen.queryByRole('button', { name: '影视' })).toBeNull();
     expect(app.calls('get_video_state')).toHaveLength(0);
+    expect(app.calls('video_magnet_status')).toHaveLength(0);
     fireEvent.click(screen.getByRole('button', { name: '播放 原来的歌曲' }));
     await settle();
     expect(app.calls('play_track')).toHaveLength(1);
@@ -714,5 +716,98 @@ describe('recent video history', () => {
     expect(screen.getByRole('contentinfo', { name: '音乐播放控制' })).toHaveTextContent(
       '原来的歌曲',
     );
+  });
+});
+
+describe('影视磁力下载', () => {
+  const magnet = 'magnet:?xt=urn:btih:0123456789012345678901234567890123456789&dn=demo';
+  const download = (status: string) => ({
+    id: 'job-7',
+    status,
+    name: '演示资源',
+    progressBytes: 1024,
+    totalBytes: 2048,
+    speedBytesPerSec: 512,
+    error: null,
+    files:
+      status === 'complete'
+        ? [
+            { index: 4, name: '正片.mkv', size: 2048 },
+            { index: 5, name: '花絮.mp4', size: 1024 },
+          ]
+        : [],
+  });
+  it('retains the link on picker dismissal and opens only the selected completed movie without switching playback', async () => {
+    let attempts = 0;
+    let current: ReturnType<typeof download> | null = null;
+    const app = setup({
+      operation: (command) => {
+        if (command === 'video_magnet_status') return current;
+        if (command === 'video_magnet_start') {
+          if (attempts++ === 0) return null;
+          current = download('fetchingMetadata');
+          return current;
+        }
+        if (command === 'video_magnet_open') return initialVideo({ entry });
+      },
+    });
+    await app.ready();
+    expect(app.calls('video_magnet_status')).toHaveLength(0);
+    await app.open();
+    const field = screen.getByRole('textbox', { name: '影片磁力链接' });
+    const start = screen.getByRole('button', { name: '选择目录并下载' });
+    fireEvent.change(field, { target: { value: 'bad link' } });
+    fireEvent.click(start);
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(app.calls('video_magnet_start')).toHaveLength(0);
+    fireEvent.change(field, { target: { value: '  ' + magnet + '  ' } });
+    fireEvent.click(start);
+    await settle();
+    expect(field).toHaveValue('  ' + magnet + '  ');
+    fireEvent.click(start);
+    await settle();
+    expect(app.calls('video_magnet_start')[1][1]).toEqual({ magnet });
+    expect(screen.getByText('正在获取影片列表')).toBeVisible();
+    current = download('downloading');
+    await app.tick();
+    expect(screen.getByRole('progressbar', { name: '影片下载进度' })).toHaveAttribute(
+      'value',
+      '1024',
+    );
+    expect(screen.getByText(/512 B\/s/)).toBeVisible();
+    current = download('complete');
+    await app.tick();
+    fireEvent.click(screen.getByRole('button', { name: '载入影片 正片.mkv' }));
+    await settle();
+    expect(app.calls('video_magnet_open')[0][1]).toEqual({ id: 'job-7', index: 4 });
+    expect(screen.getByRole('heading', { name: '影片文件' })).toHaveFocus();
+    expect(screen.getByRole('contentinfo', { name: '音乐播放控制' })).toHaveTextContent(
+      '原来的歌曲',
+    );
+    expect(app.calls('start_video_play')).toHaveLength(0);
+    expect(app.calls('control')).toHaveLength(0);
+  });
+
+  it('cancels the active task by ID and ignores an older in-flight progress read', async () => {
+    const oldRead = deferred<ReturnType<typeof download>>();
+    let reads = 0;
+    const app = setup({
+      operation: (command) => {
+        if (command === 'video_magnet_status')
+          return reads++ === 0 ? download('downloading') : oldRead.promise;
+        if (command === 'video_magnet_cancel') return download('cancelled');
+      },
+    });
+    await app.ready();
+    await app.open();
+    await app.tick();
+    fireEvent.click(screen.getByRole('button', { name: '取消下载' }));
+    await settle();
+    expect(app.calls('video_magnet_cancel')[0][1]).toEqual({ id: 'job-7' });
+    await act(async () => {
+      oldRead.resolve(download('downloading'));
+    });
+    expect(screen.getByText('下载已取消')).toBeVisible();
+    expect(screen.queryByRole('progressbar', { name: '影片下载进度' })).toBeNull();
   });
 });

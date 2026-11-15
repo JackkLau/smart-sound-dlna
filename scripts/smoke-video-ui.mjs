@@ -102,6 +102,7 @@ try {
       error: null,
     };
     window.videoCalls = [];
+    window.magnetTask = null;
     window.failVideoPause = false;
     window.failVideoRecheck = false;
     window.cancelVideoExport = true;
@@ -118,6 +119,20 @@ try {
             };
           if (command === 'get_state') return structuredClone(music);
           if (command === 'get_video_state') return structuredClone(video);
+          if (command === 'video_magnet_status') return structuredClone(window.magnetTask);
+          if (command === 'video_magnet_start') {
+            window.magnetTask = {
+              id: 'demo-download',
+              status: 'downloading',
+              name: '影视示例',
+              progressBytes: 1024,
+              totalBytes: 2048,
+              speedBytesPerSec: 512,
+              files: [],
+              error: null,
+            };
+            return structuredClone(window.magnetTask);
+          }
           if (command === 'pick_video_file') {
             video.entry = {
               id: 'film',
@@ -295,6 +310,28 @@ try {
   const navigation = page.getByRole('navigation', { name: '媒体类型' });
   await navigation.getByRole('button', { name: '影视', exact: true }).click();
   await expect(page.locator('#video-title')).toBeVisible();
+  const download = page.getByRole('region', { name: '磁力下载' });
+  await download
+    .getByRole('textbox', { name: '影片磁力链接' })
+    .fill('magnet:?xt=urn:btih:0123456789012345678901234567890123456789');
+  await download.getByRole('button', { name: '选择目录并下载' }).click();
+  await expect(download.getByRole('progressbar')).toHaveAttribute('value', '1024');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => {
+    window.magnetTask.status = 'complete';
+    window.magnetTask.files = [{ index: 7, name: '长片名'.repeat(40) + '.mkv', size: 2048 }];
+  });
+  const downloadedFile = download.getByRole('button', { name: /^载入影片 / });
+  await expect(downloadedFile).toBeVisible();
+  await downloadedFile.scrollIntoViewIfNeeded();
+  expect(
+    await page.evaluate(() => document.body.scrollWidth <= document.documentElement.clientWidth),
+  ).toBe(true);
+  await download.screenshot({ path: 'test-results/react/video-magnet-narrow.png' });
+  await page.evaluate(() => {
+    window.magnetTask = null;
+  });
+  await page.setViewportSize({ width: 1180, height: 850 });
   await page.getByRole('button', { name: '选择影片', exact: true }).click();
   const recent = page.getByRole('region', { name: '最近影片', exact: true });
   await expect(recent.getByRole('listitem')).toHaveCount(5);
@@ -433,11 +470,11 @@ try {
   await page.getByRole('button', { name: '停止影片', exact: true }).click();
   await expect(page.getByRole('button', { name: '停止影片', exact: true })).not.toBeVisible();
   await page.setViewportSize({ width: 1180, height: 850 });
-  await page.getByRole('combobox', {name:'投送字幕'}).click();
-  await page.getByRole('option', {name:/轨道 2/}).click();
-  await page.getByRole('combobox', {name:'字幕处理方式'}).click();
-  await page.getByRole('option', {name:/1080p 兼容模式/}).click();
-  await page.screenshot({path:'test-results/react/video-subtitles.png'});
+  await page.getByRole('combobox', { name: '投送字幕' }).click();
+  await page.getByRole('option', { name: /轨道 2/ }).click();
+  await page.getByRole('combobox', { name: '字幕处理方式' }).click();
+  await page.getByRole('option', { name: /1080p 兼容模式/ }).click();
+  await page.screenshot({ path: 'test-results/react/video-subtitles.png' });
   await page.getByRole('button', { name: '检查并准备', exact: true }).click();
   await page.getByRole('button', { name: '播放字幕版本', exact: true }).click();
   await expect(page.getByRole('button', { name: '暂停影片', exact: true })).toBeVisible();

@@ -20,7 +20,8 @@ required-features = ["desktop"]
 
 [features]
 default = ["desktop"]
-desktop = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-build", "dep:keyring"]
+desktop = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-build", "dep:keyring", "dep:librqbit"]
+video-bundle = []
 custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
@@ -47,6 +48,7 @@ base64 = "0.22"
 ring = "0.17"
 tempfile = "3"
 lofty = "0.25.4"
+librqbit = { version = "=9.1.0", optional = true, default-features = false, features = ["rust-tls"] }
 mp4 = "0.14"
 keyring = { version = "=3.6.3", optional = true, features = ["apple-native", "windows-native"] }
 

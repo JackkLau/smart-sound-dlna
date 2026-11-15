@@ -69,7 +69,7 @@ pub(crate) fn check_space(directory: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn available_space(directory: &Path) -> std::io::Result<u64> {
+pub(crate) fn available_space(directory: &Path) -> std::io::Result<u64> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     let path = CString::new(directory.as_os_str().as_bytes())?;
     let mut info = std::mem::MaybeUninit::uninit();
@@ -82,7 +82,7 @@ fn available_space(directory: &Path) -> std::io::Result<u64> {
 }
 
 #[cfg(windows)]
-fn available_space(directory: &Path) -> std::io::Result<u64> {
+pub(crate) fn available_space(directory: &Path) -> std::io::Result<u64> {
     use std::os::windows::ffi::OsStrExt;
     let path: Vec<u16> = directory.as_os_str().encode_wide().chain(Some(0)).collect();
     let mut bytes = 0;

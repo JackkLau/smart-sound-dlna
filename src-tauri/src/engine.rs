@@ -317,7 +317,9 @@ pub struct Engine {
 
 impl Engine {
     pub async fn new(data_dir: PathBuf) -> Result<Arc<Self>, String> {
-        let enabled = std::env::var("XIAOMI_DLNA_VIDEO").as_deref() == Ok("1");
+        let enabled = std::env::var("XIAOMI_DLNA_VIDEO")
+            .map(|value| value == "1")
+            .unwrap_or(cfg!(feature = "video-bundle"));
         Self::new_with_video_enabled(data_dir, enabled).await
     }
 

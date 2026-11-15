@@ -306,6 +306,8 @@ export default function App({ invoke }) {
       {videoEnabled && (
         <div hidden={surface !== 'video'}>
           <VideoPanel
+            invoke={ui.invoke}
+            visible={surface === 'video'}
             video={video}
             devices={state.devices}
             busy={blocked}

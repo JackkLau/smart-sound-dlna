@@ -1,4 +1,5 @@
 {
+  "build": { "features": ["video-bundle"] },
   "bundle": {
     "externalBin": ["binaries/ffprobe", "binaries/ffmpeg"],
     "resources": {

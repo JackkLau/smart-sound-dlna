@@ -10,6 +10,8 @@ pub mod mobile;
 mod mobile_pairing;
 mod online;
 mod subtitle_cache;
+#[cfg(feature = "desktop")]
+pub mod torrent_transfer;
 mod track_names;
 pub mod video;
 mod video_catalog;

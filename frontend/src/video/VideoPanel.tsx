@@ -3,7 +3,8 @@ import { Dialog, Icon, Select } from '../components.jsx';
 import { Range } from '../Player.jsx';
 import { formatTime } from '../utils.js';
 import SubtitleOptions from './SubtitleOptions';
-import type { SubtitleSelection, VideoDevice, VideoInfo, VideoSession } from './types';
+import MagnetDownload from './MagnetDownload';
+import type { Invoke, SubtitleSelection, VideoDevice, VideoInfo, VideoSession } from './types';
 import { videoMessage, type VideoController } from './useVideo';
 import VideoDiagnostics from './VideoDiagnostics';
 import RecentVideos from './RecentVideos';
@@ -109,6 +110,8 @@ function FileSummary({ entry }: { entry: VideoInfo }) {
 }
 
 export default function VideoPanel({
+  invoke,
+  visible,
   video,
   devices,
   busy,
@@ -118,6 +121,8 @@ export default function VideoPanel({
   discover,
   addDevice,
 }: {
+  invoke: Invoke;
+  visible: boolean;
   video: VideoController;
   devices: VideoDevice[];
   busy: boolean;
@@ -409,6 +414,15 @@ export default function VideoPanel({
           />
         </section>
       )}
+      <MagnetDownload
+        invoke={invoke}
+        visible={visible}
+        ready={state.enabled && !connectionError}
+        canOpen={!unavailable && !probing && !processing}
+        openFile={async (id, index) => {
+          if (await run('video_magnet_open', { id, index })) sourceHeading.current?.focus();
+        }}
+      />
       <RecentVideos
         video={video}
         unavailable={unavailable}

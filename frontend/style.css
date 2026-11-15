@@ -70,6 +70,18 @@
 .video-recent-actions, .video-recent-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
 .video-recent-footer { justify-content: space-between; margin-top: 12px; }
 .video-recent > [role="status"] { min-height: 20px; }
+.video-magnet form, .magnet-task { margin-top: 16px; }
+.magnet-input-row, .magnet-task-heading, .magnet-files li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.magnet-input-row .clearable-field { flex: 1 1 250px; min-width: 0; }
+.magnet-input-row .button, .magnet-files .button { flex: 0 0 auto; }
+.magnet-task-heading { justify-content: space-between; }
+.magnet-task-heading > div, .magnet-file { min-width: 0; flex: 1 1 180px; overflow-wrap: anywhere; }
+.magnet-name, .magnet-stats, .magnet-file small { color: var(--color-muted); font-size: 12px; }
+.magnet-stats, .magnet-file small { font-variant-numeric: tabular-nums; }
+.magnet-task progress { display: block; width: 100%; height: 8px; margin: 8px 0; accent-color: var(--color-primary); }
+.video-magnet .magnet-files { padding: 0; list-style: none; max-height: 320px; overflow: auto; }
+.magnet-files li { padding: 10px 0; border-top: 1px solid var(--color-line); }
+.magnet-file { display: grid; }
 .video-player-details { display: grid; justify-items: end; gap: 4px; font-size: 11px; color: var(--color-muted); }
 .video-player .transport-buttons { gap: 8px; }
 @media (max-width: 760px) {
