@@ -732,6 +732,14 @@ export default function App({ invoke }) {
                 >
                   从视频导入
                 </button>
+                <button
+                  className="button outline"
+                  id="open-magnet"
+                  disabled={blocked}
+                  onClick={() => setPanel('magnet')}
+                >
+                  磁力链接下载
+                </button>
               </div>
             </div>
             {importStatus && (

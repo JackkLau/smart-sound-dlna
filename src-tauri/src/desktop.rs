@@ -23,6 +23,7 @@ struct AppState {
     engine: Arc<Engine>,
     mobile: crate::mobile::Receiver,
     magnets: magnet::Downloads,
+    general_magnets: Result<crate::magnet::Downloader, String>,
     picker_busy: Arc<AtomicBool>,
     xiaomi_login: Arc<LoginFlow>,
     bilibili_login: Arc<LoginFlow>,
@@ -467,6 +468,11 @@ pub fn run() {
         download_bilibili_batch,
         cancel_download,
         retry_download,
+        add_magnet,
+        read_magnet_links,
+        control_magnet,
+        clear_finished_magnets,
+        open_magnet_directory,
         open_provider_login,
         finish_provider_login,
         connect_voice_session,
@@ -479,6 +485,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
+            let general_magnets = crate::magnet::Downloader::new(&data_dir);
             let mobile = crate::mobile::Receiver::new(data_dir.clone());
             let engine = tauri::async_runtime::block_on(Engine::new(data_dir))
                 .map_err(std::io::Error::other)?;
@@ -507,6 +514,7 @@ pub fn run() {
                 engine,
                 mobile,
                 magnets: magnet::Downloads::default(),
+                general_magnets,
                 picker_busy: Arc::new(AtomicBool::new(false)),
                 xiaomi_login,
                 bilibili_login,
@@ -570,6 +578,7 @@ struct Features {
     xiaomi_login: LoginStatus,
     bilibili_login: LoginStatus,
     downloads: crate::bilibili::DownloadState,
+    magnets: crate::magnet::DownloadState,
     selected_device_id: Option<String>,
     selected_device_name: Option<String>,
 }
@@ -586,10 +595,89 @@ async fn get_features(state: State<'_, AppState>) -> Result<Features, String> {
         xiaomi_login: state.xiaomi_login.status(),
         bilibili_login: state.bilibili_login.status(),
         downloads: state.engine.downloads.state().await,
+        magnets: match &state.general_magnets {
+            Ok(manager) => manager.state().await,
+            Err(error) => crate::magnet::DownloadState {
+                available: false,
+                directory: String::new(),
+                jobs: Vec::new(),
+                error: error.clone(),
+            },
+        },
         selected_device_id: snapshot.selected_device_id,
         selected_device_name: name,
     })
 }
+#[tauri::command]
+async fn read_magnet_links(
+    text: Option<String>,
+) -> Result<Vec<crate::magnet_clipboard::Candidate>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::magnet_clipboard::read_links(text))
+        .await
+        .map_err(|_| "读取失败，请手动粘贴磁力链接。".to_string())?
+}
+
+#[tauri::command]
+async fn add_magnet(uri: String, state: State<'_, AppState>) -> Result<crate::magnet::Job, String> {
+    state
+        .general_magnets
+        .as_ref()
+        .map_err(Clone::clone)?
+        .add(&uri)
+        .await
+}
+
+#[tauri::command]
+async fn control_magnet(
+    id: String,
+    action: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state
+        .general_magnets
+        .as_ref()
+        .map_err(Clone::clone)?
+        .control(&id, &action)
+        .await
+}
+
+#[tauri::command]
+async fn clear_finished_magnets(state: State<'_, AppState>) -> Result<(), String> {
+    state
+        .general_magnets
+        .as_ref()
+        .map_err(Clone::clone)?
+        .clear_finished()
+        .await
+}
+
+#[tauri::command]
+async fn open_magnet_directory(state: State<'_, AppState>) -> Result<(), String> {
+    let directory = state
+        .general_magnets
+        .as_ref()
+        .map_err(Clone::clone)?
+        .directory();
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let mut command = std::process::Command::new("/usr/bin/open");
+        #[cfg(target_os = "windows")]
+        let mut command = std::process::Command::new("explorer.exe");
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let mut command = std::process::Command::new("xdg-open");
+        let mut child = command
+            .arg(directory)
+            .spawn()
+            .map_err(|e| format!("无法打开下载目录：{e}"))?;
+        tauri::async_runtime::spawn_blocking(move || {
+            let _ = child.wait();
+        });
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn parse_video(
     url: String,

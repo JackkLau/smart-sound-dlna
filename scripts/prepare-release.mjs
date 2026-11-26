@@ -40,7 +40,8 @@ export async function prepareRelease(input, output, { version, sha, runUrl }) {
   await writeFile(path.join(output, 'SHA256SUMS'), packages.map(item => `${item.sha256}  ${item.name}\n`).join(''), { flag: 'wx' });
   const notes = `小米音乐投送 ${version}
 
-- 音乐可投送到 DLNA 音箱和电视。本版改进了局域网设备发现和电视音乐播放。
+- 在「导入音乐 → 磁力链接下载」打开窗口或切回客户端时，可从剪贴板识别有效链接。多条资源去重后供选择，点击「开始下载」才会添加任务。
+- 通用磁力下载支持进度、暂停和续传，需要本机安装 aria2c。影视页仍可用内置下载功能获取影片。
 - 在「影视」页选择本地 MP4、MKV 或 M2TS，可查看音轨和字幕轨并将影片直接投送到电视。
 - 粘贴含 BTIH 的磁力链接，选择保存目录。下载完成后点击「载入影片」，即可选择电视播放。
 - 内封字幕可标记为默认轨并保留原画质，也可合入画面输出 1080p。Windows x64 和 Apple Silicon 还支持将 HDR10 影片的 PGS 字幕合入原分辨率画面。默认字幕能否显示取决于电视播放器。

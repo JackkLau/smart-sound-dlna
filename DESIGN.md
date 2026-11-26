@@ -148,6 +148,14 @@ The playback feedback region adds a native disclosure using the existing `video-
 
 “重新检查连接” makes an explicit, read-only native request for the current session/generation and never resends Play. It is unavailable after that session loses ownership. “导出诊断” uses a Rust-owned system save dialog; a stopped session can still export its retained diagnostics. Neither command accepts a renderer-supplied file path. Both use the same `useDesktop.mutate` foreground owner as playback. Cancellation returns false and leaves state intact without a success message; true shows an inline saved status. Errors remain in the existing persistent video error region. Session changes reset the saved status, and stale polling cannot replace a foreground result.
 
+### Magnet downloads
+
+The import section's “磁力链接下载” action reuses `features/MagnetPanel.jsx`, the shared native `Dialog`, `Form`, `ClearableInput`, feature request lock and `announce` slot. The existing light tokens and download-row recipes remain authoritative. The fifth import action wraps through the established grid; no page-shell or scrollbar ownership changes.
+
+`get_features.magnets` provides availability, the local download directory, bounded job projections and persistent status errors. `add_magnet({uri})`, `control_magnet({id,action})`, `clear_finished_magnets()` and `open_magnet_directory()` are main-window-only IPC. The backend owns a separate on-demand aria2 child process; its endpoint, secret, magnet/Tracker URLs and GIDs never enter queue projections. The user-entered link stays in the unsent form draft until successful creation. No private magnet search or navigation state is written to URLs or browser storage.
+
+The form explains a missing engine and preserves editable input while disabling creation. Validation is linked to its field, returns focus, blocks IME submissions and duplicates, and preserves failed drafts. Downloads continue after dialog close; application exit interrupts them and restart restores incomplete records as paused until explicit resume. The queue distinguishes metadata resolution, waiting, payload download, pause, stop, failure and completion. Only payload bytes get determinate progress; metadata completion follows the new GID before reporting file completion. A maximum of 100 records is paged at 10 per page with clamped memory-only pagination. Pause/stop are recoverable and retain files. Clearing completed/stopped history uses the shared confirmation dialog, initially focuses Cancel, and explicitly retains files. File selection and automatic media import are outside this feature.
+
 ### Music IPC contract
 
 | Renderer operation | Native command | Arguments / result |
