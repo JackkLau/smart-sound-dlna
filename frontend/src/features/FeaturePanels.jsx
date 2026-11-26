@@ -5,6 +5,7 @@ import BilibiliPanel from './BilibiliPanel.jsx';
 import VoicePanel from './VoicePanel.jsx';
 import MobilePanel from './MobilePanel.jsx';
 import DownloadQueue from './DownloadQueue.jsx';
+import MagnetPanel, { MagnetQueue } from './MagnetPanel.jsx';
 
 export default function FeaturePanels({
   panel,
@@ -31,7 +32,15 @@ export default function FeaturePanels({
       <BilibiliPanel open={panel === 'bilibili'} onClose={onClose} controller={controller} />
       <VoicePanel open={panel === 'voice'} onClose={onClose} controller={controller} />
       <MobilePanel open={panel === 'mobile'} onClose={onClose} controller={controller} />
-      {queueTarget && createPortal(<DownloadQueue controller={controller} />, queueTarget)}
+      <MagnetPanel open={panel === 'magnet'} onClose={onClose} controller={controller} />
+      {queueTarget &&
+        createPortal(
+          <>
+            <DownloadQueue controller={controller} />
+            <MagnetQueue controller={controller} />
+          </>,
+          queueTarget,
+        )}
     </>
   );
 }

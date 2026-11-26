@@ -5,6 +5,9 @@ pub mod douyin;
 mod douyin_webview;
 pub mod engine;
 pub mod library;
+pub mod magnet;
+#[cfg(feature = "desktop")]
+mod magnet_clipboard;
 pub mod media;
 pub mod mobile;
 mod mobile_pairing;

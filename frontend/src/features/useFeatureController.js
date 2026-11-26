@@ -4,6 +4,7 @@ import { messageOf } from '../utils.js';
 export const emptyFeatures = {
   voice: { connected: false, listening: false, devices: [] },
   downloads: { authenticated: false, directory: '', jobs: [] },
+  magnets: { available: false, directory: '', jobs: [], error: '' },
 };
 
 export default function useFeatureController({
