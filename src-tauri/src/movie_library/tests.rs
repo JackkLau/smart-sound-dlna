@@ -12,7 +12,10 @@ fn boundaries_including_current_year_type_and_short_title() {
     let store = Store::open(&dir.path().join("片库.sqlite3")).unwrap();
     let db = Connection::open(&store.path).unwrap();
     let mut rows = db
-        .query("SELECT strftime('%Y','now','localtime')", &[])
+        .query(
+            "SELECT coalesce(strftime('%Y','now','localtime'),substr(CURRENT_DATE,1,4))",
+            &[],
+        )
         .unwrap();
     rows.next().unwrap();
     let current = rows.integer(0);
@@ -218,6 +221,36 @@ fn bundled_template() -> PathBuf {
 }
 
 #[test]
+fn version_four_upgrade_restores_visibility_and_keeps_user_edits() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("catalog.sqlite3");
+    let store = Store::open_packaged(&path, &bundled_template()).unwrap();
+    let id = "711119";
+    let record = snapshot(id, 2010, 80, "2020-01-01");
+    store.import(&json!([record]).to_string()).unwrap();
+    let uri = format!("magnet:?xt=urn:btih:{}", "a".repeat(40));
+    store.save_link(id, &uri, "用户添加").unwrap();
+    {
+        let db = Connection::open(&path).unwrap();
+        // A v4 database on a system without localtime produces an empty movies view.
+        db.batch(
+            "DROP VIEW movies;
+            CREATE VIEW movies AS SELECT d.*, 0 AS resource_count FROM douban_snapshots d WHERE 0;
+            PRAGMA user_version=4",
+        )
+        .unwrap();
+    }
+    assert!(store.get(id).is_err());
+    let migrated = Store::open_packaged(&path, &dir.path().join("absent.sqlite3")).unwrap();
+    assert_eq!(migrated.get(id).unwrap().resource_count, 1);
+    assert_eq!(migrated.links(id).unwrap()[0].source, "用户添加");
+    let db = Connection::open(&path).unwrap();
+    let mut version = db.query("PRAGMA user_version", &[]).unwrap();
+    assert!(version.next().unwrap());
+    assert_eq!(version.integer(0), SCHEMA_VERSION);
+}
+
+#[test]
 fn packaged_database_is_copied_once_and_user_changes_survive_restart() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("用户数据/片库.sqlite3");
@@ -252,7 +285,7 @@ fn missing_or_corrupt_bundles_and_existing_corrupt_databases_are_handled_safely(
     fs::remove_file(&template).unwrap();
     Connection::open(&template)
         .unwrap()
-        .batch("PRAGMA user_version=4")
+        .batch("PRAGMA user_version=5")
         .unwrap();
     assert!(Store::open_packaged(&destination, &template).is_err());
     assert_eq!(fs::read_dir(&parent).unwrap().count(), 0);
