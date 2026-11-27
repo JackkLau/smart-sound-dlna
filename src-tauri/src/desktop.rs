@@ -1,3 +1,4 @@
+mod catalog;
 mod magnet;
 
 use crate::{
@@ -23,6 +24,7 @@ struct AppState {
     engine: Arc<Engine>,
     mobile: crate::mobile::Receiver,
     magnets: magnet::Downloads,
+    catalog: catalog::Catalog,
     general_magnets: Result<crate::magnet::Downloader, String>,
     picker_busy: Arc<AtomicBool>,
     xiaomi_login: Arc<LoginFlow>,
@@ -433,6 +435,21 @@ pub fn run() {
         get_config,
         get_video_state,
         pick_video_file,
+        catalog::movie_library_list,
+        catalog::movie_library_links,
+        catalog::movie_library_search,
+        catalog::movie_library_save,
+        catalog::movie_library_import,
+        catalog::movie_library_start,
+        catalog::movie_library_open_source,
+        catalog::movie_library_sync,
+        catalog::movie_library_refresh,
+        catalog::movie_library_batch_status,
+        catalog::movie_library_batch_advance,
+        catalog::movie_library_candidates,
+        catalog::movie_library_dismiss,
+        catalog::movie_library_remove,
+        catalog::movie_library_review_ids,
         video_magnet_start,
         video_magnet_status,
         video_magnet_cancel,
@@ -485,6 +502,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
+            let catalog = catalog::Catalog::new(&data_dir, app.path().resource_dir());
             let general_magnets = crate::magnet::Downloader::new(&data_dir);
             let mobile = crate::mobile::Receiver::new(data_dir.clone());
             let engine = tauri::async_runtime::block_on(Engine::new(data_dir))
@@ -514,6 +532,7 @@ pub fn run() {
                 engine,
                 mobile,
                 magnets: magnet::Downloads::default(),
+                catalog,
                 general_magnets,
                 picker_busy: Arc::new(AtomicBool::new(false)),
                 xiaomi_login,

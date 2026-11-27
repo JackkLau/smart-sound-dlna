@@ -187,6 +187,13 @@ export async function verifyVideoBundle(directory, target) {
   if (target !== hostTarget())
     throw new Error('Video bundle must be executed on its native target runner');
   const bundle = await inspectVideoBundle(directory, target);
+  const catalog = await execute(process.execPath, [
+    '--experimental-sqlite',
+    path.join(projectRoot, 'scripts/verify-movie-catalog.mjs'),
+    bundle.root,
+    target,
+    '--first-run',
+  ]);
   await verifyToolBytes(bundle, bundle.probe, 'ffprobe', bundle.spec.sha256);
   const encoders = JSON.parse(await readFile(path.join(projectRoot, 'scripts/subtitle-tools.json'), 'utf8'));
   await verifyToolBytes(bundle, bundle.encoder, 'ffmpeg', encoders[target].sha256);
@@ -251,6 +258,7 @@ export async function verifyVideoBundle(directory, target) {
     version: version.split(/\r?\n/)[0],
     path_independent: true,
     fixture_verified: true,
+    catalog: JSON.parse(catalog.stdout),
   };
 }
 

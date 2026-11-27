@@ -45,6 +45,8 @@ export async function verifyMacosArtifacts(directory, { target, identifier, vers
     mounted = true;
     const packaged = await one(mount, '.app');
     if (await verifyMacosApp(packaged, identity) !== expectedDigest) throw new Error('DMG application differs from verified build');
+    const catalogVerifier = fileURLToPath(new URL('./verify-movie-catalog.mjs', import.meta.url));
+    await execute(process.execPath, ['--experimental-sqlite', catalogVerifier, packaged, target]);
   } finally {
     // Never modify the mounted image or the user's quarantine/Gatekeeper settings.
     if (mounted) await execute('/usr/bin/hdiutil', ['detach', mount]);
@@ -56,6 +58,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     if (process.platform !== 'darwin') throw new Error('macOS artifact verification must run on macOS');
     const config = JSON.parse(await readFile(new URL('../src-tauri/tauri.conf.json', import.meta.url), 'utf8'));
     await verifyMacosArtifacts(process.argv[2], { target: process.argv[3], identifier: config.identifier, version: config.version });
-    process.stdout.write('Verified macOS app and DMG: sealed signature, version, architecture and identical executable.\n');
+    process.stdout.write('Verified macOS app and DMG: sealed signature, version, architecture, identical executable and populated SQLite catalog.\n');
   } catch (error) { reportFailure('macOS installer verification failed', error); }
 }
