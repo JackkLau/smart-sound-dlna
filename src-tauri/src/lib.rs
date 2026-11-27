@@ -1,5 +1,9 @@
 pub mod bilibili;
+#[cfg(feature = "desktop")]
+mod catalog_queue;
 pub mod dlna;
+#[cfg(feature = "desktop")]
+mod douban_catalog;
 pub mod douyin;
 #[cfg(feature = "desktop")]
 mod douyin_webview;
@@ -11,6 +15,9 @@ mod magnet_clipboard;
 pub mod media;
 pub mod mobile;
 mod mobile_pairing;
+#[cfg(feature = "desktop")]
+mod movie_discovery;
+pub mod movie_library;
 mod online;
 mod subtitle_cache;
 #[cfg(feature = "desktop")]

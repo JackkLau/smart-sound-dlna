@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "小米音乐投送",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "identifier": "com.localmusic.xiaomi-dlna",
   "build": {
     "frontendDist": "../dist/desktop",
@@ -34,7 +34,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": { "../docs/third-party/rqbit.txt": "licenses/rqbit.txt" },
+    "resources": {
+      "../docs/third-party/rqbit.txt": "licenses/rqbit.txt",
+      "data/movie-library.sqlite3": "catalog/movie-library.sqlite3"
+    },
     "shortDescription": "将本地音乐和影片投送到 DLNA 音箱或电视，支持磁力链接下载影片",
     "category": "Music",
     "icon": [

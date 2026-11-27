@@ -135,6 +135,7 @@ export default function VideoPanel({
   const { state, error, pending, run } = video;
   const [candidate, setCandidate] = useState('');
   const [confirm, setConfirm] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const candidateRef = useRef<HTMLButtonElement | null>(null);
   const sourceHeading = useRef<HTMLHeadingElement>(null);
   const unavailable = busy || pending || !state.enabled;
@@ -183,6 +184,14 @@ export default function VideoPanel({
           </h1>
           <p>选择电脑上的影片，在电视上播放。选片和检查信息不会停止音乐。</p>
         </div>
+        <button
+          type="button"
+          className="button outline"
+          disabled={!state.enabled}
+          onClick={() => setLibraryOpen(true)}
+        >
+          浏览电影资源库
+        </button>
       </div>
       {connectionError && (
         <div className="notice warning video-notice" role="status">
@@ -415,6 +424,8 @@ export default function VideoPanel({
         </section>
       )}
       <MagnetDownload
+        libraryOpen={libraryOpen && visible}
+        closeLibrary={() => setLibraryOpen(false)}
         invoke={invoke}
         visible={visible}
         ready={state.enabled && !connectionError}

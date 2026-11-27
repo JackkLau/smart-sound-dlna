@@ -1,0 +1,36 @@
+[
+  {
+    "id": "3273874",
+    "title": "蓝调之歌",
+    "original": "Sita Sings the Blues",
+    "year": 2008,
+    "rating_tenths": 81,
+    "observed": "2026-04-20",
+    "kind": "movie",
+    "uri": "magnet:?xt=urn:btih:05547db7c0c5fbbe50f00212ee43e9cec5b006fa&dn=Sita+Sings+the+Blues+%281080P+official+release%29&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80&tr=udp%3A%2F%2Fopen.demonii.com%3A1337",
+    "source": "https://github.com/Andonome/lk/blob/103504aeae34fe420fd1a8e92ee7db4b6fa126d2/networking/transmission.md",
+    "license_url": "https://www.sitasingstheblues.com/license.html",
+    "rating_evidence": "https://github.com/aaamqrx/doban-data/blob/89aa62a129ec61c720392ba35774437d70e1d025/data/raw/fantasy.xlsx",
+    "rating_evidence_row": "Sheet1!A1073:I1073",
+    "rating_votes": 2883,
+    "distribution_page": "https://www.sitasingstheblues.com/watch.html",
+    "sources_checked_on": "2026-11-27"
+  },
+  {
+    "id": "25785114",
+    "title": "互联网之子",
+    "original": "The Internet's Own Boy: The Story of Aaron Swartz",
+    "year": 2014,
+    "rating_tenths": 91,
+    "observed": "2026-04-20",
+    "kind": "movie",
+    "uri": "magnet:?xt=urn:btih:96bc64e8731aa86269c1f9266177bc9f92581437&dn=The+Internet%27s+Own+Boy&tr=https%3A%2F%2Fpeertube2.cpy.re%2Ftracker%2Fannounce",
+    "source": "https://docs.joinpeertube.org/api/activitypub",
+    "license_url": "https://creativecommons.org/licenses/by-nc-sa/3.0/",
+    "rating_evidence": "https://github.com/aaamqrx/doban-data/blob/89aa62a129ec61c720392ba35774437d70e1d025/data/raw/documentary.xlsx",
+    "rating_evidence_row": "Sheet1!A77:I77",
+    "rating_votes": 17211,
+    "distribution_page": "https://archive.org/details/TheInternetsOwnBoyTheStoryofAaronSwartzHD",
+    "sources_checked_on": "2026-11-27"
+  }
+]

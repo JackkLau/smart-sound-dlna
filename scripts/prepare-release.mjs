@@ -40,6 +40,7 @@ export async function prepareRelease(input, output, { version, sha, runUrl }) {
   await writeFile(path.join(output, 'SHA256SUMS'), packages.map(item => `${item.sha256}  ${item.name}\n`).join(''), { flag: 'wx' });
   const notes = `小米音乐投送 ${version}
 
+- 安装包内含 SQLite 电影片库。首次启动即可从「影视 → 浏览电影资源库」离线查找 1990 年以来豆瓣 8.0 分及以上的电影，再按需检索、确认和下载磁力版本。
 - 在「导入音乐 → 磁力链接下载」打开窗口或切回客户端时，可从剪贴板识别有效链接。多条资源去重后供选择，点击「开始下载」才会添加任务。
 - 通用磁力下载支持进度、暂停和续传，需要本机安装 aria2c。影视页仍可用内置下载功能获取影片。
 - 在「影视」页选择本地 MP4、MKV 或 M2TS，可查看音轨和字幕轨并将影片直接投送到电视。

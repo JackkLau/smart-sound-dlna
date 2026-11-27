@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEv
 import { ClearableInput } from '../components.jsx';
 import type { Invoke } from './types';
 import { videoMessage } from './useVideo';
+import MovieLibrary from './MovieLibrary';
 
 const labels = {
   fetchingMetadata: '正在获取影片列表',
@@ -53,7 +54,11 @@ export default function MagnetDownload({
   ready,
   canOpen,
   openFile,
+  libraryOpen,
+  closeLibrary,
 }: {
+  libraryOpen: boolean;
+  closeLibrary: () => void;
   invoke: Invoke;
   visible: boolean;
   ready: boolean;
@@ -108,25 +113,33 @@ export default function MagnetDownload({
   const active = task?.status === 'fetchingMetadata' || task?.status === 'downloading';
   const busy = pending !== null || !ready || !loaded;
 
-  async function change(action: 'start' | 'cancel') {
+  async function change(action: 'start' | 'cancel', resource?: { id: string; uri: string }) {
     const current = control.current;
-    if (busy || current.changing) return;
+    if (busy || current.changing || (action === 'start' && active)) {
+      if (resource) throw new Error('请等待当前下载任务结束。');
+      return false;
+    }
     current.changing = true;
     current.generation++;
     setPending(action);
     setActionError('');
     try {
       const next = downloadState(
-        await (action === 'start'
-          ? invoke('video_magnet_start', { magnet: link.trim() })
-          : invoke('video_magnet_cancel', { id: task?.id })),
+        await (resource
+          ? invoke('movie_library_start', resource)
+          : action === 'start'
+            ? invoke('video_magnet_start', { magnet: link.trim() })
+            : invoke('video_magnet_cancel', { id: task?.id })),
       );
-      if (!current.mounted) return;
+      if (!current.mounted) return false;
       // Dismissing the native folder picker returns the previous task.
       setTask(next);
       setReadError('');
+      return next !== null && next.id !== task?.id;
     } catch (failure) {
+      if (resource) throw failure;
       if (current.mounted) setActionError(videoMessage(failure));
+      return false;
     } finally {
       current.changing = false;
       if (current.mounted) setPending(null);
@@ -152,7 +165,24 @@ export default function MagnetDownload({
 
   return (
     <section className="video-evidence video-magnet" aria-labelledby="video-magnet-heading">
-      <h2 id="video-magnet-heading">磁力下载</h2>
+      <h2 id="video-magnet-heading" tabIndex={-1}>
+        磁力下载
+      </h2>
+      {libraryOpen && (
+        <MovieLibrary
+          invoke={invoke}
+          start={async (id, uri) => {
+            const started = await change('start', { id, uri });
+            if (started)
+              requestAnimationFrame(() => {
+                document.getElementById('video-magnet-heading')?.focus();
+              });
+            return started;
+          }}
+          canStart={!busy && !active}
+          onClose={closeLibrary}
+        />
+      )}
       {!active && (
         <form noValidate onSubmit={submit}>
           <label className="field-label" htmlFor="video-magnet-link">

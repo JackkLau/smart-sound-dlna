@@ -10,6 +10,17 @@ Windows / macOS 桌面客户端，可将电脑里的音乐投送到 DLNA 音箱�
 
 [Windows 安装与测试](docs/VIDEO_WINDOWS_TEST.md) · [播放与诊断](docs/VIDEO_M1_PROGRESS.md) · [最近影片与播放位置](docs/VIDEO_S4_PROGRESS.md)。
 
+## 本地电影资源库
+
+0.11.0 的入口是 **影视 → 浏览电影资源库**。安装包随附预置的 SQLite 片库。首次启动会将它复制到应用数据目录，离线即可浏览；之后的评分更新、添加和移除资源写入自己的 `movie-library.sqlite3`。升级时继续使用原有片库。按影片的上映年份（含 1990 至当前年份）、条目类型（电影）和最近一次采录的豆瓣评分（含 8.0）筛选。查看详情可见评分观察日期。来源未覆盖的影片可以用经核实的豆瓣评分快照补入。
+
+- **更新豆瓣片库** 分页读取公开榜单，再遍历电影分类榜。可以暂停，下次从已保存的进度继续。来源要求验证、限流或网络中断时仍可离线浏览。点击影片详情里的「刷新此片评分」可单独核实。评分降至 8.0 以下的电影退出列表，已保存的关联保留。
+- **找资源** 查询 Internet Archive 的发布页和真实种子；后台核对片名、可用年份、许可和影片格式。候选经你确认后进入片库。同一个种子的多个来源按 BTIH 归并。也可以从剪贴板补录自己持有的链接。
+- **下载** 使用影视页内置引擎。选定目录后开始下载，完成后可载入影片并投屏。归档的链接可能暂时没有节点。
+- **导入片单** 接受 UTF-8 JSON 数组，结构见 [随附评分快照](src-tauri/data/movie-seed.json)。其中 `id` 是豆瓣电影条目编号，`rating_tenths` 是评分乘十的整数，`observed` 为实际观察日期。相同编号优先使用较新的观测。
+
+开发环境可运行 `node scripts/cargo.mjs run --manifest-path src-tauri/Cargo.toml --no-default-features --example movie_library_db -- /path/to/movie-library.sqlite3` 生成独立数据库。在 SQLite 浏览器打开 `film_catalog` 可直接查看影片、十分制评分、观察日期及对应的磁力链接；查询 `movies` 可获取每部影片的资源数量；`movie_resources`、`resources`、`resource_sources` 保存已确认的对应关系、磁力和来源。
+
 ## 下载安装包
 
 以下固定入口指向最近一次完整通过三端测试和打包的版本，无需登录 GitHub：

@@ -1,6 +1,6 @@
 [package]
 name = "xiaomi-dlna-desktop"
-version = "0.10.1"
+version = "0.11.0"
 edition = "2021"
 rust-version = "1.90"
 description = "Local music casting for Xiaomi DLNA speakers"
@@ -20,7 +20,7 @@ required-features = ["desktop"]
 
 [features]
 default = ["desktop"]
-desktop = ["dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-build", "dep:keyring", "dep:librqbit", "dep:objc2", "dep:objc2-app-kit"]
+desktop = ["dep:chrono", "dep:dom_query", "dep:httpdate", "dep:tauri", "dep:tauri-plugin-dialog", "dep:tauri-build", "dep:keyring", "dep:librqbit", "dep:objc2", "dep:objc2-app-kit"]
 video-bundle = []
 custom-protocol = ["tauri/custom-protocol"]
 
@@ -28,6 +28,9 @@ custom-protocol = ["tauri/custom-protocol"]
 tauri-build = { version = "2", optional = true , features = [] }
 
 [dependencies]
+chrono = { version = "0.4", optional = true }
+httpdate = { version = "1", optional = true }
+dom_query = { version = "0.28", optional = true }
 tauri = { version = "2", optional = true , features = [] }
 tauri-plugin-dialog = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
