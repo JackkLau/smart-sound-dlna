@@ -40,6 +40,16 @@ CREATE TABLE removed_movie_resources (
 PRAGMA user_version=2;";
 const SEED: &str = include_str!("../data/movie-seed.json");
 const OPEN_FILMS: &str = include_str!("../data/open-film-resources.json");
+const SCHEMA_VERSION: i32 = 5;
+// Windows' system SQLite can omit the localtime modifier. The UTC year remains available.
+const MOVIE_YEAR_VIEW: &str = "
+DROP VIEW IF EXISTS movies;
+CREATE VIEW movies AS
+    SELECT d.*, (SELECT count(*) FROM movie_resources r WHERE r.movie_id=d.id) AS resource_count
+    FROM douban_snapshots d
+    WHERE kind='movie' AND rating_tenths BETWEEN 80 AND 100
+      AND year BETWEEN 1990 AND CAST(coalesce(strftime('%Y','now','localtime'),substr(CURRENT_DATE,1,4)) AS INTEGER);
+PRAGMA user_version=5;";
 const SCHEMA: &str = "
 CREATE TABLE douban_snapshots (
     id TEXT PRIMARY KEY, title TEXT NOT NULL, original TEXT NOT NULL,
@@ -55,11 +65,6 @@ CREATE TABLE movie_resources (
     movie_id TEXT NOT NULL REFERENCES douban_snapshots(id), btih TEXT NOT NULL REFERENCES resources(btih),
     PRIMARY KEY(movie_id,btih)
 );
-CREATE VIEW movies AS
-    SELECT d.*, (SELECT count(*) FROM movie_resources r WHERE r.movie_id=d.id) AS resource_count
-    FROM douban_snapshots d
-    WHERE kind='movie' AND rating_tenths BETWEEN 80 AND 100
-      AND year BETWEEN 1990 AND CAST(strftime('%Y','now','localtime') AS INTEGER);
 PRAGMA user_version=1;
 ";
 
@@ -126,7 +131,7 @@ pub struct Store {
 fn validate_template(path: &Path) -> Result<(), String> {
     let db = Connection::open(path)?;
     let mut version = db.query("PRAGMA user_version", &[])?;
-    if !version.next()? || version.integer(0) != 4 {
+    if !version.next()? || version.integer(0) != SCHEMA_VERSION {
         return Err("不支持的初始片库版本".into());
     }
     let mut check = db.query("PRAGMA quick_check", &[])?;
@@ -203,7 +208,7 @@ impl Store {
                     }
                     db.batch(SCHEMA)?;
                 }
-                1..=4 => {
+                1..=SCHEMA_VERSION => {
                     if !db.query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='douban_snapshots'", &[])?.next()? {
                         return Err("所选数据库不是此应用的电影片库".into());
                     }
@@ -215,6 +220,7 @@ impl Store {
             }
             if version < 3 { db.batch(RATING_EVIDENCE)?; }
             if version < 4 { db.batch(CATALOG_VIEW)?; }
+            if version < 5 { db.batch(MOVIE_YEAR_VIEW)?; }
             let movies: Vec<SeedMovie> = serde_json::from_str(SEED)
                 .map_err(|e| format!("内置片单数据格式错误：{e}"))?;
             let open_films: Vec<OpenFilm> = serde_json::from_str(OPEN_FILMS)
